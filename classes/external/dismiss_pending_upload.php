@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,8 +17,8 @@
 /**
  * External function `local_nexusai_dismiss_pending_upload`.
  *
- * El docente eligió NO indexar el archivo en NexusAI.
- * Solo elimina la entrada de la user preference sin enviar nada al backend.
+ * The teacher chose NOT to index the file in NexusAI.
+ * Just removes the entry from the user preference without sending anything to the backend.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -27,50 +27,53 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * El docente eligió NO indexar el archivo en NexusAI.
+ * The teacher chose NOT to index the file in NexusAI.
  */
-class dismiss_pending_upload extends \external_api {
+class dismiss_pending_upload extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'cmid' => new \external_value(PARAM_INT, 'Course module ID del recurso a descartar', VALUE_REQUIRED),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'cmid' => new external_value(PARAM_INT, 'Course module ID of the resource to dismiss', VALUE_REQUIRED),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'success' => new \external_value(PARAM_BOOL, 'Siempre true'),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'success' => new external_value(PARAM_BOOL, 'Always true'),
         ]);
     }
 
     /**
-     * El docente eligió NO indexar el archivo en NexusAI.
+     * The teacher chose NOT to index the file in NexusAI.
      *
-     * @param int $cmid Course module ID del recurso a descartar
+     * @param int $cmid Course module ID of the resource to dismiss
      * @return array
      */
     public static function execute(int $cmid): array {
+        global $USER;
+
         $params = self::validate_parameters(self::execute_parameters(), [
             'cmid' => $cmid,
         ]);
 
-        // No necesitamos validar capability aquí: el peor caso es que alguien
-        // borre una preference propia. Aun así, require login está garantizado
-        // por loginrequired: true en services.php.
+        // It only touches the caller's own preference, so the user context is the
+        // right one and no capability is needed beyond being logged in.
+        self::validate_context(\context_user::instance((int) $USER->id));
         $raw     = get_user_preferences(\local_nexusai\observer::PENDING_PREF, '{}');
         $pending = json_decode($raw, true);
         if (!is_array($pending)) {

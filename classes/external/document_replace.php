@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,9 +17,9 @@
 /**
  * External function `local_nexusai_document_replace`.
  *
- * CONT-07 (#356): reemplaza el archivo de un documento existente manteniendo
- * su document_id (las citas viejas del chat siguen apuntando al mismo id).
- * Mismos validadores que document_upload.php (magic bytes, tamaño, mimetype).
+ * CONT-07 (#356): replaces an existing document's file while keeping its
+ * document_id (old chat citations keep pointing to the same id).
+ * Same validators as document_upload.php (magic bytes, size, mimetype).
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -28,47 +28,48 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * CONT-07 (#356): reemplaza el archivo de un documento existente manteniendo su document_id (las citas viejas
- * del chat siguen apuntando al mismo id).
+ * CONT-07 (#356): replaces an existing document's file while keeping its document_id (old chat
+ * citations keep pointing to the same id).
  */
-class document_replace extends \external_api {
+class document_replace extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid'    => new \external_value(PARAM_INT, 'ID del curso de Moodle', VALUE_REQUIRED),
-            'documentid'  => new \external_value(PARAM_ALPHANUMEXT, 'UUID del documento a reemplazar', VALUE_REQUIRED),
-            'filename'    => new \external_value(PARAM_FILE, 'Nombre del archivo nuevo (con extensión)', VALUE_REQUIRED),
-            'mimetype'    => new \external_value(PARAM_RAW, 'MIME type detectado por el browser', VALUE_REQUIRED),
-            'content_b64' => new \external_value(PARAM_RAW, 'Contenido binario en base64', VALUE_REQUIRED),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid'    => new external_value(PARAM_INT, 'Moodle course ID', VALUE_REQUIRED),
+            'documentid'  => new external_value(PARAM_ALPHANUMEXT, 'UUID of the document to replace', VALUE_REQUIRED),
+            'filename'    => new external_value(PARAM_FILE, 'New file name (with extension)', VALUE_REQUIRED),
+            'mimetype'    => new external_value(PARAM_RAW, 'MIME type detected by the browser', VALUE_REQUIRED),
+            'content_b64' => new external_value(PARAM_RAW, 'Binary content in base64', VALUE_REQUIRED),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'id'            => new \external_value(PARAM_ALPHANUMEXT, 'UUID del documento (sin cambios)'),
-            'course_id'     => new \external_value(PARAM_INT, 'ID del curso'),
-            'uploader_id'   => new \external_value(PARAM_INT, 'ID del docente que subió'),
-            'filename'      => new \external_value(PARAM_RAW, 'Nombre del archivo'),
-            'mime_type'     => new \external_value(PARAM_RAW, 'MIME type'),
-            'section'       => new \external_value(PARAM_INT, 'Sección asignada', VALUE_OPTIONAL, null, NULL_ALLOWED),
-            'status'        => new \external_value(PARAM_ALPHA, 'pending | indexing | indexed | error'),
-            'error_message' => new \external_value(
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'id'            => new external_value(PARAM_ALPHANUMEXT, 'Document UUID (unchanged)'),
+            'course_id'     => new external_value(PARAM_INT, 'Course ID'),
+            'uploader_id'   => new external_value(PARAM_INT, 'ID of the teacher who uploaded it'),
+            'filename'      => new external_value(PARAM_RAW, 'File name'),
+            'mime_type'     => new external_value(PARAM_RAW, 'MIME type'),
+            'section'       => new external_value(PARAM_INT, 'Assigned section', VALUE_OPTIONAL, null, NULL_ALLOWED),
+            'status'        => new external_value(PARAM_ALPHA, 'pending | indexing | indexed | error'),
+            'error_message' => new external_value(
                 PARAM_RAW,
-                'Mensaje de error si status=error',
+                'Error message if status=error',
                 VALUE_OPTIONAL,
                 null,
                 NULL_ALLOWED
@@ -76,7 +77,7 @@ class document_replace extends \external_api {
         ]);
     }
 
-    /** MIME types permitidos → validador de magic bytes (igual que document_upload.php). */
+    /** Allowed MIME types → magic-bytes validator (same as document_upload.php). */
     private const ALLOWED_MIME_TYPES = [
         'application/pdf',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -89,14 +90,14 @@ class document_replace extends \external_api {
     ];
 
     /**
-     * Reemplaza el archivo de un documento existente manteniendo su document_id (CONT-07, #356).
+     * Replaces an existing document's file while keeping its document_id (CONT-07, #356).
      *
-     * @param int    $courseid   ID del curso (el contexto del curso valida acceso).
-     * @param string $documentid UUID del documento a reemplazar.
-     * @param string $filename   Nombre del archivo nuevo.
-     * @param string $mimetype   MIME type: PDF, DOCX, PPTX, XLSX, CSV, MD, HTML o TXT.
-     * @param string $contentb64 Contenido binario del archivo nuevo en base64.
-     * @return array Document state después del reemplazo.
+     * @param int    $courseid   Course ID (the course context validates access).
+     * @param string $documentid UUID of the document to replace.
+     * @param string $filename   New file's name.
+     * @param string $mimetype   MIME type: PDF, DOCX, PPTX, XLSX, CSV, MD, HTML or TXT.
+     * @param string $contentb64 New file's binary content in base64.
+     * @return array Document state after the replacement.
      */
     public static function execute(
         int $courseid,
@@ -118,34 +119,32 @@ class document_replace extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:manage', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         if (!in_array($params['mimetype'], self::ALLOWED_MIME_TYPES, true)) {
-            throw new \invalid_parameter_exception(
-                'Unsupported file type. Allowed: PDF, DOCX, PPTX, XLSX, CSV, MD, HTML, TXT. '
-                . 'Got: ' . $params['mimetype']
-            );
+            throw new \moodle_exception('errorunsupportedfiletype', 'local_nexusai', '', s($params['mimetype']));
         }
 
         if (strlen($params['filename']) === 0 || strlen($params['filename']) > 255) {
-            throw new \invalid_parameter_exception('Invalid filename length');
+            throw new \moodle_exception('errorinvalidfilename', 'local_nexusai');
         }
 
-        // Base64 inflate ~33%, así que 20 MB de archivo = ~27 MB en base64.
+        // Base64 inflates by ~33%, so a 20 MB file = ~27 MB in base64.
         if (strlen($params['content_b64']) > 30 * 1024 * 1024) {
-            throw new \invalid_parameter_exception('File too large (max 20MB)');
+            throw new \moodle_exception('errorfiletoolarge', 'local_nexusai', '', '20 MB');
         }
 
         $filebytes = base64_decode($params['content_b64'], true);
         if ($filebytes === false || $filebytes === '') {
-            throw new \invalid_parameter_exception('Invalid base64 content');
+            throw new \moodle_exception('errorinvalidparams', 'local_nexusai');
         }
 
         self::validate_magic_bytes($filebytes, $params['mimetype']);
 
         $client = new backend_client();
 
-        // Defensa: verificar que el documento pertenece al curso antes de
-        // reemplazarlo (mismo criterio que document_reindex/document_delete).
+        // Defense: verify the document belongs to the course before
+        // replacing it (same criterion as document_reindex/document_delete).
         $document = $client->get_document($params['documentid']);
         if (((int) ($document['course_id'] ?? 0)) !== (int) $params['courseid']) {
             throw new \moodle_exception(
@@ -154,6 +153,11 @@ class document_replace extends \external_api {
                 '',
                 'Cannot replace: document does not belong to the requested course'
             );
+        }
+
+        if (!empty($document['cmid'])) {
+            // It also changes the activity's file.
+            require_capability('moodle/course:manageactivities', $context);
         }
 
         $response = $client->replace_document(
@@ -172,29 +176,19 @@ class document_replace extends \external_api {
             );
         }
 
-        // Actualizar la copia en el file storage de Moodle: borrar la vieja
-        // (pudo tener otro nombre) y guardar la nueva bajo el nombre actual.
-        $fs = get_file_storage();
-        $existing = $fs->get_file(
-            $context->id,
-            'local_nexusai',
-            'documents',
-            $params['courseid'],
-            '/',
-            $params['filename']
-        );
-        if ($existing) {
-            $existing->delete();
+        // The document is the file of a "File" activity: replace that file too, so the
+        // classroom and the index keep showing the same one (VIS-05). The file API does
+        // not fire course_module_updated, so nothing is indexed twice.
+        $activityurl = !empty($document['cmid'])
+            ? \local_nexusai\local\material_link::url_for_cmid((int) $params['courseid'], (int) $document['cmid'])
+            : null;
+        if ($activityurl !== null) {
+            \local_nexusai\local\material_activity::replace_file(
+                (int) $document['cmid'],
+                $params['filename'],
+                $filebytes
+            );
         }
-        $filerecord = [
-            'contextid' => $context->id,
-            'component' => 'local_nexusai',
-            'filearea'  => 'documents',
-            'itemid'    => (int) $params['courseid'],
-            'filepath'  => '/',
-            'filename'  => $params['filename'],
-        ];
-        $fs->create_file_from_string($filerecord, $filebytes);
 
         return [
             'id'            => (string) $response['id'],
@@ -209,29 +203,29 @@ class document_replace extends \external_api {
     }
 
     /**
-     * Verifica magic bytes contra el MIME type declarado.
-     * Lanza invalid_parameter_exception si no coinciden.
+     * Verifies magic bytes against the declared MIME type.
+     * Throws invalid_parameter_exception if they don't match.
      */
     private static function validate_magic_bytes(string $bytes, string $mimetype): void {
         switch ($mimetype) {
             case 'application/pdf':
                 if (substr($bytes, 0, 5) !== '%PDF-') {
-                    throw new \invalid_parameter_exception('File does not look like a valid PDF');
+                    throw new \moodle_exception('errorfilecontent', 'local_nexusai', '', 'PDF');
                 }
                 break;
             case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
                 if (substr($bytes, 0, 4) !== "PK\x03\x04") {
-                    throw new \invalid_parameter_exception('File does not look like a valid DOCX');
+                    throw new \moodle_exception('errorfilecontent', 'local_nexusai', '', 'DOCX');
                 }
                 break;
             case 'application/vnd.openxmlformats-officedocument.presentationml.presentation':
                 if (substr($bytes, 0, 4) !== "PK\x03\x04") {
-                    throw new \invalid_parameter_exception('File does not look like a valid PPTX');
+                    throw new \moodle_exception('errorfilecontent', 'local_nexusai', '', 'PPTX');
                 }
                 break;
             case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
                 if (substr($bytes, 0, 4) !== "PK\x03\x04") {
-                    throw new \invalid_parameter_exception('File does not look like a valid XLSX');
+                    throw new \moodle_exception('errorfilecontent', 'local_nexusai', '', 'XLSX');
                 }
                 break;
             case 'text/plain':
@@ -239,7 +233,7 @@ class document_replace extends \external_api {
             case 'text/markdown':
             case 'text/html':
                 if (!mb_check_encoding($bytes, 'UTF-8')) {
-                    throw new \invalid_parameter_exception('Text file is not valid UTF-8');
+                    throw new \moodle_exception('errortextencoding', 'local_nexusai');
                 }
                 break;
         }

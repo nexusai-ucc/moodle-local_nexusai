@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,13 +15,13 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Tests de `onboarding_state_get`/`onboarding_state_set` (ONB-05 / #428).
+ * Tests for `onboarding_state_get`/`onboarding_state_set` (ONB-05 / #428).
  *
- * Qué se verifica:
- *  1. Sin preferencia previa → { dismissed: false, skipped: [] }.
- *  2. write_state() + read_state() → refleja lo guardado (round-trip).
- *  3. write_state() cappea `skipped` a MAX_SKIPPED y descarta duplicados.
- *  4. execute_returns() de ambas declara la forma esperada.
+ * What's verified:
+ *  1. With no previous preference → { dismissed: false, skipped: [] }.
+ *  2. write_state() + read_state() → reflects what was saved (round-trip).
+ *  3. write_state() caps `skipped` to MAX_SKIPPED and drops duplicates.
+ *  4. Both execute_returns() declare the expected shape.
  *
  * @package    local_nexusai
  * @category   test
@@ -31,8 +31,10 @@
 
 namespace local_nexusai;
 
+use core_external\external_multiple_structure;
+
 /**
- * Tests de las external functions onboarding_state_get/onboarding_state_set (ONB-05, #428).
+ * Tests for the onboarding_state_get/onboarding_state_set external functions (ONB-05, #428).
  *
  * @covers \local_nexusai\external\onboarding_state_get
  * @covers \local_nexusai\external\onboarding_state_set
@@ -47,10 +49,10 @@ final class onboarding_state_test extends \advanced_testcase {
 
         $state = \local_nexusai\external\onboarding_state_get::read_state($course->id);
 
-        // Se usa assertEquals, no assertSame: $course->id que devuelve el generador de test
-        // viene como string numérico; read_state() lo tipa a int vía su firma
-        // (int $courseid) -- son el mismo curso, la representación PHP exacta no
-        // es lo que este test quiere probar.
+        // Using assertEquals, not assertSame: $course->id as returned by the test
+        // generator comes as a numeric string; read_state() types it to int via its
+        // signature (int $courseid) -- it's the same course, the exact PHP
+        // representation isn't what this test is meant to check.
         $this->assertEquals($course->id, $state['courseid']);
         $this->assertFalse($state['dismissed']);
         $this->assertSame([], $state['skipped']);
@@ -82,7 +84,7 @@ final class onboarding_state_test extends \advanced_testcase {
         $state2 = \local_nexusai\external\onboarding_state_get::read_state($course2->id);
 
         $this->assertTrue($state1['dismissed']);
-        $this->assertFalse($state2['dismissed'], 'El dismissal de un curso no debe afectar a otro');
+        $this->assertFalse($state2['dismissed'], 'One course\'s dismissal must not affect another');
         $this->assertSame([], $state2['skipped']);
     }
 
@@ -98,7 +100,7 @@ final class onboarding_state_test extends \advanced_testcase {
         \local_nexusai\external\onboarding_state_set::write_state($course->id, false, $withdupes);
         $state = \local_nexusai\external\onboarding_state_get::read_state($course->id);
 
-        $this->assertCount(20, $state['skipped'], 'skipped no debe superar MAX_SKIPPED (20)');
+        $this->assertCount(20, $state['skipped'], 'skipped must not exceed MAX_SKIPPED (20)');
         $this->assertSame(array_slice($many, 0, 20), $state['skipped']);
     }
 
@@ -109,7 +111,7 @@ final class onboarding_state_test extends \advanced_testcase {
         $this->assertArrayHasKey('courseid', $keys);
         $this->assertArrayHasKey('dismissed', $keys);
         $this->assertArrayHasKey('skipped', $keys);
-        $this->assertInstanceOf(\external_multiple_structure::class, $keys['skipped']);
+        $this->assertInstanceOf(external_multiple_structure::class, $keys['skipped']);
     }
 
     public function test_set_execute_returns_shape(): void {

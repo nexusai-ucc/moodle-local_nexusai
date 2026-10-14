@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,13 +17,13 @@
 /**
  * External function `local_nexusai_onboarding_state_set` (ONB-05 / #428).
  *
- * Guarda, para el usuario actual y un curso puntual, si el tutorial fue
- * cerrado (`dismissed`) y qué pasos opcionales están marcados "no aplica"
- * (`skipped`). Reemplazo completo (read-modify-write desde el front) —
- * mismo patrón simple que el resto del plugin, sin operaciones parciales.
+ * Saves, for the current user and a specific course, whether the tutorial
+ * was dismissed (`dismissed`) and which optional steps are marked "not
+ * applicable" (`skipped`). Full replacement (read-modify-write from the
+ * front end) — same simple pattern as the rest of the plugin, no partial operations.
  *
- * Único write de toda la épica de onboarding (ADR-010), y es sobre
- * `user_preferences` de core, no una tabla propia.
+ * The only write in the whole onboarding epic (ADR-010), and it's on
+ * core's `user_preferences`, not a table of its own.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -32,30 +32,32 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_multiple_structure;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Guarda, para el usuario actual y un curso puntual, si el tutorial fue cerrado (`dismissed`) y qué pasos
- * opcionales están marcados "no aplica" (`skipped`).
+ * Saves, for the current user and a specific course, whether the tutorial was dismissed
+ * (`dismissed`) and which optional steps are marked "not applicable" (`skipped`).
  */
-class onboarding_state_set extends \external_api {
-    /** Tope de items en `skipped` — son 6 pasos posibles como mucho hoy, 20 da margen. */
+class onboarding_state_set extends external_api {
+    /** Cap on `skipped` items — there are at most 6 possible steps today, 20 gives margin. */
     private const MAX_SKIPPED = 20;
 
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid'  => new \external_value(PARAM_INT, 'ID del curso', VALUE_REQUIRED),
-            'dismissed' => new \external_value(PARAM_BOOL, 'Cerrar (true) o reabrir (false) el tutorial', VALUE_REQUIRED),
-            'skipped'   => new \external_multiple_structure(
-                new \external_value(PARAM_ALPHANUMEXT, 'Key del paso marcado "no aplica"'),
-                'Pasos opcionales excluidos de futuras revisiones',
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid'  => new external_value(PARAM_INT, 'Course ID', VALUE_REQUIRED),
+            'dismissed' => new external_value(PARAM_BOOL, 'Dismiss (true) or reopen (false) the tutorial', VALUE_REQUIRED),
+            'skipped'   => new external_multiple_structure(
+                new external_value(PARAM_ALPHANUMEXT, 'Key of the step marked "not applicable"'),
+                'Optional steps excluded from future reviews',
                 VALUE_REQUIRED
             ),
         ]);
@@ -64,21 +66,21 @@ class onboarding_state_set extends \external_api {
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'success' => new \external_value(PARAM_BOOL, 'Guardado correctamente'),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'success' => new external_value(PARAM_BOOL, 'Saved successfully'),
         ]);
     }
 
     /**
-     * Guarda, para el usuario actual y un curso puntual, si el tutorial fue cerrado (`dismissed`) y qué pasos
-     * opcionales están marcados "no aplica" (`skipped`).
+     * Saves, for the current user and a specific course, whether the tutorial was dismissed
+     * (`dismissed`) and which optional steps are marked "not applicable" (`skipped`).
      *
-     * @param int $courseid ID del curso
-     * @param bool $dismissed Cerrar (true) o reabrir (false) el tutorial
-     * @param array $skipped Pasos opcionales excluidos de futuras revisiones
+     * @param int $courseid Course ID
+     * @param bool $dismissed Dismiss (true) or reopen (false) the tutorial
+     * @param array $skipped Optional steps excluded from future reviews
      * @return array
      */
     public static function execute(int $courseid, bool $dismissed, array $skipped): array {
@@ -91,6 +93,7 @@ class onboarding_state_set extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:manage', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         self::write_state($params['courseid'], $params['dismissed'], $params['skipped']);
 
@@ -98,7 +101,7 @@ class onboarding_state_set extends \external_api {
     }
 
     /**
-     * Separado de execute() para poder testearlo sin pasar por validate_context().
+     * Separated from execute() so it can be tested without going through validate_context().
      */
     public static function write_state(int $courseid, bool $dismissed, array $skipped): void {
         $skipped = array_slice(array_values(array_unique($skipped)), 0, self::MAX_SKIPPED);

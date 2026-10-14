@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,16 +15,18 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Descarga de documentos subidos al plugin NexusAI.
+ * Opens the material behind a source cited by NexusAI (VIS-05).
  *
- * Sirve el archivo directamente desde el file storage de Moodle, sin
- * depender del backend Python. El archivo se guarda en Moodle durante
- * el upload (ver classes/external/document_upload.php).
+ * Every document NexusAI holds comes from a "File" activity of the course, so
+ * opening it means opening that activity: Moodle applies its own rules (eye
+ * icon, hidden section, availability restrictions, role) and shows its own
+ * error to whoever cannot see it. There is no separate copy of the file that
+ * could be reached around those rules.
  *
  * Query params:
- *   - courseid  (int)    — ID del curso (para localizar el archivo en Moodle)
- *   - filename  (string) — Nombre del archivo
- *   - sesskey   (string) — CSRF token de Moodle
+ *   - courseid    (int)    — Moodle course ID
+ *   - document_id (string) — UUID of the document, as the backend returns it
+ *   - sesskey     (string) — Moodle CSRF token
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -40,36 +42,37 @@ global $USER, $CFG;
 require_login();
 if (isguestuser()) {
     http_response_code(403);
-    die('Acceso denegado');
+    die(get_string('erroraccessdenied', 'local_nexusai'));
 }
 require_sesskey();
 
-$courseid = isset($_GET['courseid']) ? (int) $_GET['courseid'] : 0;
-$filename = isset($_GET['filename']) ? trim((string) $_GET['filename']) : '';
+$courseid   = optional_param('courseid', 0, PARAM_INT);
+$documentid = optional_param('document_id', '', PARAM_ALPHANUMEXT);
 
 if ($courseid <= 0) {
     http_response_code(400);
-    die('courseid requerido');
+    die(get_string('errorcourseidrequired', 'local_nexusai'));
 }
-
-// Sanitizar filename: solo nombre de archivo, sin path traversal.
-$filename = basename($filename);
-if ($filename === '' || strlen($filename) > 255) {
+if ($documentid === '' || strlen($documentid) > 64) {
     http_response_code(400);
-    die('filename inválido');
+    die(get_string('errorinvalidparams', 'local_nexusai'));
 }
 
 $context = context_course::instance($courseid);
 require_capability('local/nexusai:use', $context);
-
-$fs   = get_file_storage();
-$file = $fs->get_file($context->id, 'local_nexusai', 'documents', $courseid, '/', $filename);
-
-if (!$file || $file->is_directory()) {
-    http_response_code(404);
-    die('El archivo no está disponible. Para habilitarlo, eliminá y volvé a '
-        . 'subir el documento desde la sección Documentos del plugin.');
+if (!\local_nexusai\local\course_guard::is_enabled($courseid)) {
+    http_response_code(403);
+    die(get_string('coursedisabled', 'local_nexusai'));
 }
 
-// Delega Content-Type, Content-Disposition, caching y rangos a Moodle core.
-send_stored_file($file, 86400, 0, false, ['filename' => $filename]);
+$url = \local_nexusai\local\material_link::url_for_document($courseid, $documentid);
+if ($url === null) {
+    http_response_code(404);
+    die(get_string('errorfilenotavailable', 'local_nexusai'));
+}
+if ($url === false) {
+    http_response_code(403);
+    die(get_string('errormaterialhidden', 'local_nexusai'));
+}
+
+redirect($url);

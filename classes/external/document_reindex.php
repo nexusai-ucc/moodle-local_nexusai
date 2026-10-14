@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,10 +17,10 @@
 /**
  * External function `local_nexusai_document_reindex`.
  *
- * Re-corre la indexación de un documento ya subido, sin pedir un archivo
- * nuevo (CONT-09, #358) — el backend lee el archivo que ya tiene guardado
- * en disco desde el upload original. A diferencia de `document_replace`,
- * no recibe ningún contenido en la request.
+ * Re-runs indexing on an already-uploaded document, without requesting a new
+ * file (CONT-09, #358) — the backend reads the file it already has saved on
+ * disk from the original upload. Unlike `document_replace`, it receives no
+ * content in the request.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -29,51 +29,52 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Re-corre la indexación de un documento ya subido, sin pedir un archivo nuevo (CONT-09, #358) — el backend
- * lee el archivo que ya tiene guardado en disco desde el upload original.
+ * Re-runs indexing on an already-uploaded document, without requesting a new file (CONT-09, #358)
+ * — the backend reads the file it already has saved on disk from the original upload.
  */
-class document_reindex extends \external_api {
+class document_reindex extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid'   => new \external_value(PARAM_INT, 'ID del curso (para validar capability)', VALUE_REQUIRED),
-            'documentid' => new \external_value(PARAM_ALPHANUMEXT, 'UUID del documento a reindexar', VALUE_REQUIRED),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid'   => new external_value(PARAM_INT, 'Course ID (to validate the capability)', VALUE_REQUIRED),
+            'documentid' => new external_value(PARAM_ALPHANUMEXT, 'UUID of the document to reindex', VALUE_REQUIRED),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'id'            => new \external_value(PARAM_ALPHANUMEXT, 'ID del documento'),
-            'course_id'     => new \external_value(PARAM_INT, 'ID del curso'),
-            'uploader_id'   => new \external_value(PARAM_INT, 'ID de quien subió el archivo originalmente'),
-            'filename'      => new \external_value(PARAM_TEXT, 'Nombre del archivo'),
-            'mime_type'     => new \external_value(PARAM_RAW, 'MIME type'),
-            'status'        => new \external_value(PARAM_ALPHA, 'pending | indexing | indexed | error'),
-            'error_message' => new \external_value(
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'id'            => new external_value(PARAM_ALPHANUMEXT, 'Document ID'),
+            'course_id'     => new external_value(PARAM_INT, 'Course ID'),
+            'uploader_id'   => new external_value(PARAM_INT, 'ID of whoever originally uploaded the file'),
+            'filename'      => new external_value(PARAM_TEXT, 'File name'),
+            'mime_type'     => new external_value(PARAM_RAW, 'MIME type'),
+            'status'        => new external_value(PARAM_ALPHA, 'pending | indexing | indexed | error'),
+            'error_message' => new external_value(
                 PARAM_RAW,
-                'Mensaje de error si status=error',
+                'Error message if status=error',
                 VALUE_OPTIONAL,
                 null,
                 NULL_ALLOWED
             ),
-            'created_at'    => new \external_value(PARAM_RAW, 'Timestamp de creación', VALUE_OPTIONAL, null, NULL_ALLOWED),
-            'updated_at'    => new \external_value(
+            'created_at'    => new external_value(PARAM_RAW, 'Creation timestamp', VALUE_OPTIONAL, null, NULL_ALLOWED),
+            'updated_at'    => new external_value(
                 PARAM_RAW,
-                'Timestamp de última actualización',
+                'Last update timestamp',
                 VALUE_OPTIONAL,
                 null,
                 NULL_ALLOWED
@@ -82,11 +83,11 @@ class document_reindex extends \external_api {
     }
 
     /**
-     * Re-corre la indexación de un documento ya subido, sin pedir un archivo nuevo (CONT-09, #358) — el
-     * backend lee el archivo que ya tiene guardado en disco desde el upload original.
+     * Re-runs indexing on an already-uploaded document, without requesting a new file (CONT-09,
+     * #358) — the backend reads the file it already has saved on disk from the original upload.
      *
-     * @param int $courseid ID del curso (para validar capability)
-     * @param string $documentid UUID del documento a reindexar
+     * @param int $courseid Course ID (to validate the capability)
+     * @param string $documentid UUID of the document to reindex
      * @return array
      */
     public static function execute(int $courseid, string $documentid): array {
@@ -98,11 +99,12 @@ class document_reindex extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:manage', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $client = new backend_client();
 
-        // Defensa: verificar que el documento pertenece al curso antes de
-        // reindexar (mismo criterio que document_delete/document_status).
+        // Defense: verify the document belongs to the course before
+        // reindexing (same criterion as document_delete/document_status).
         $document = $client->get_document($params['documentid']);
         if (((int) ($document['course_id'] ?? 0)) !== (int) $params['courseid']) {
             throw new \moodle_exception(

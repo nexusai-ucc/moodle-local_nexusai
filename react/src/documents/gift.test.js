@@ -1,3 +1,25 @@
+// This file is part of Moodle - https://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
+
+/**
+ * Part of the NexusAI plugin (local_nexusai).
+ *
+ * @copyright  2026 NexusAI Team — UCC
+ * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { toGiftFormat, downloadGiftFile } from "./gift.js";
 
@@ -126,6 +148,27 @@ describe("toGiftFormat — multiple questions", () => {
 
     it("returns just a trailing newline for an empty question list", () => {
         expect(toGiftFormat([])).toBe("\n");
+    });
+});
+
+describe("toGiftFormat — language of titles and comments", () => {
+    const questions = [
+        { question_type: "true_false", question: "Q1", correct_index: 0, explanation: "" },
+        { question_type: "open", question: "Q2", explanation: "Because." },
+    ];
+
+    it("uses English titles and the model-answer comment when lang is 'en'", () => {
+        const gift = toGiftFormat(questions, "en");
+        expect(gift).toContain("::Question 1::Q1 {TRUE}");
+        expect(gift).toContain("::Question 2::Q2 {}");
+        expect(gift).toContain("// Model answer: Because.");
+        expect(gift).not.toContain("Pregunta");
+        expect(gift).not.toContain("Respuesta modelo");
+    });
+
+    it("keeps the Spanish titles by default and for lang 'es'", () => {
+        expect(toGiftFormat(questions)).toContain("::Pregunta 1::");
+        expect(toGiftFormat(questions, "es")).toContain("// Respuesta modelo: Because.");
     });
 });
 

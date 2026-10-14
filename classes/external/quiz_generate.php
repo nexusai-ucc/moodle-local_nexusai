@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,9 +17,9 @@
 /**
  * External function `local_nexusai_quiz_generate`.
  *
- * Proxy entre React y el endpoint /api/v1/quiz/generate del backend Python.
- * Genera un quiz de práctica con preguntas de opción múltiple basadas en
- * el material indexado del curso.
+ * Proxy between React and the Python backend's /api/v1/quiz/generate endpoint.
+ * Generates a practice quiz with multiple-choice questions based on
+ * the course's indexed material.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -28,62 +28,65 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_multiple_structure;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Proxy entre React y el endpoint /api/v1/quiz/generate del backend Python.
+ * Proxy between React and the Python backend's /api/v1/quiz/generate endpoint.
  */
-class quiz_generate extends \external_api {
+class quiz_generate extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid'      => new \external_value(PARAM_INT, 'ID del curso', VALUE_REQUIRED),
-            'topic'         => new \external_value(PARAM_RAW, 'Tema (opcional)', VALUE_DEFAULT, ''),
-            'numquestions'  => new \external_value(PARAM_INT, 'Cantidad de preguntas (1..10)', VALUE_DEFAULT, 5),
-            'questiontype'  => new \external_value(
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid'      => new external_value(PARAM_INT, 'Course ID', VALUE_REQUIRED),
+            'topic'         => new external_value(PARAM_RAW, 'Topic (optional)', VALUE_DEFAULT, ''),
+            'numquestions'  => new external_value(PARAM_INT, 'Number of questions (1..10)', VALUE_DEFAULT, 5),
+            'questiontype'  => new external_value(
                 PARAM_ALPHANUMEXT,
-                'Tipo de pregunta (multiple_choice|true_false|open|mix|flashcard)',
+                'Question type (multiple_choice|true_false|open|mix|flashcard)',
                 VALUE_DEFAULT,
                 'multiple_choice'
             ),
-            'difficulty'    => new \external_value(PARAM_ALPHA, 'Dificultad (easy|medium|hard)', VALUE_DEFAULT, 'medium'),
+            'difficulty'    => new external_value(PARAM_ALPHA, 'Difficulty (easy|medium|hard)', VALUE_DEFAULT, 'medium'),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'course_id' => new \external_value(PARAM_INT, 'ID del curso'),
-            'topic'     => new \external_value(PARAM_RAW, 'Tema solicitado', VALUE_OPTIONAL, null, NULL_ALLOWED),
-            'questions' => new \external_multiple_structure(
-                new \external_single_structure([
-                    'id'                  => new \external_value(
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'course_id' => new external_value(PARAM_INT, 'Course ID'),
+            'topic'     => new external_value(PARAM_RAW, 'Requested topic', VALUE_OPTIONAL, null, NULL_ALLOWED),
+            'questions' => new external_multiple_structure(
+                new external_single_structure([
+                    'id'                  => new external_value(
                         PARAM_ALPHANUMEXT,
-                        'ID persistido (solo flashcards, SP-11)',
+                        'Persisted ID (flashcards only, SP-11)',
                         VALUE_OPTIONAL,
                         null,
                         NULL_ALLOWED
                     ),
-                    'question_type'      => new \external_value(PARAM_ALPHANUMEXT, 'Tipo de pregunta'),
-                    'question'           => new \external_value(PARAM_RAW, 'Texto de la pregunta'),
-                    'options'            => new \external_multiple_structure(
-                        new \external_value(PARAM_RAW, 'Opción')
+                    'question_type'      => new external_value(PARAM_ALPHANUMEXT, 'Question type'),
+                    'question'           => new external_value(PARAM_RAW, 'Question text'),
+                    'options'            => new external_multiple_structure(
+                        new external_value(PARAM_RAW, 'Option')
                     ),
-                    'correct_index'      => new \external_value(PARAM_INT, 'Índice de la opción correcta (-1..3)'),
-                    'explanation'        => new \external_value(PARAM_RAW, 'Explicación / respuesta modelo'),
-                    'source_filename'    => new \external_value(PARAM_TEXT, 'Archivo del que sale la pregunta'),
-                    'source_document_id' => new \external_value(
+                    'correct_index'      => new external_value(PARAM_INT, 'Index of the correct option (-1..3)'),
+                    'explanation'        => new external_value(PARAM_RAW, 'Explanation / model answer'),
+                    'source_filename'    => new external_value(PARAM_TEXT, 'File the question comes from'),
+                    'source_document_id' => new external_value(
                         PARAM_ALPHANUMEXT,
-                        'ID del documento fuente (UUID)',
+                        'Source document ID (UUID)',
                         VALUE_OPTIONAL,
                         null,
                         NULL_ALLOWED
@@ -94,13 +97,13 @@ class quiz_generate extends \external_api {
     }
 
     /**
-     * Proxy entre React y el endpoint /api/v1/quiz/generate del backend Python.
+     * Proxy between React and the Python backend's /api/v1/quiz/generate endpoint.
      *
-     * @param int $courseid ID del curso
-     * @param string $topic Tema (opcional)
-     * @param int $numquestions Cantidad de preguntas (1..10)
-     * @param string $questiontype Tipo de pregunta (multiple_choice|true_false|open|mix|flashcard)
-     * @param string $difficulty Dificultad (easy|medium|hard)
+     * @param int $courseid Course ID
+     * @param string $topic Topic (optional)
+     * @param int $numquestions Number of questions (1..10)
+     * @param string $questiontype Question type (multiple_choice|true_false|open|mix|flashcard)
+     * @param string $difficulty Difficulty (easy|medium|hard)
      * @return array
      */
     public static function execute(
@@ -123,10 +126,11 @@ class quiz_generate extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:use', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $cleantopic = trim((string) $params['topic']);
         if (mb_strlen($cleantopic) > 200) {
-            throw new \invalid_parameter_exception('Topic too long (max 200 chars)');
+            throw new \moodle_exception('errortopictoolong', 'local_nexusai', '', 200);
         }
         $numq = max(1, min(10, (int) $params['numquestions']));
 

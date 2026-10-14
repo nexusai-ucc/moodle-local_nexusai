@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,10 +17,10 @@
 /**
  * External function `local_nexusai_forum_webhook_save`.
  *
- * Guarda (o borra, con url = '') la URL de webhook Slack/Discord/Teams del
- * curso para el digest semanal del foro (FOR-07, #378). La URL vive en el
- * backend Python — el plugin no tiene tabla de configuración por-curso
- * propia (ver forum_weekly_digest.php).
+ * Saves (or deletes, with url = '') the course's Slack/Discord/Teams webhook
+ * URL for the weekly forum digest (FOR-07, #378). The URL lives in the
+ * Python backend — the plugin has no per-course config table of its own
+ * (see forum_weekly_digest.php).
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -29,44 +29,45 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Guarda (o borra, con url = '') la URL de webhook Slack/Discord/Teams del curso para el digest semanal del
- * foro (FOR-07, #378).
+ * Saves (or deletes, with url = '') the course's Slack/Discord/Teams webhook URL for the weekly
+ * forum digest (FOR-07, #378).
  */
-class forum_webhook_save extends \external_api {
+class forum_webhook_save extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid'   => new \external_value(PARAM_INT, 'ID del curso', VALUE_REQUIRED),
-            'webhookurl' => new \external_value(PARAM_URL, 'URL del webhook (vacío para borrar)', VALUE_DEFAULT, ''),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid'   => new external_value(PARAM_INT, 'Course ID', VALUE_REQUIRED),
+            'webhookurl' => new external_value(PARAM_URL, 'Webhook URL (empty to delete)', VALUE_DEFAULT, ''),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'webhook_url' => new \external_value(PARAM_URL, 'URL guardada', VALUE_OPTIONAL, null, NULL_ALLOWED),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'webhook_url' => new external_value(PARAM_URL, 'Saved URL', VALUE_OPTIONAL, null, NULL_ALLOWED),
         ]);
     }
 
     /**
-     * Guarda (o borra, con url = '') la URL de webhook Slack/Discord/Teams del curso para el digest semanal
-     * del foro (FOR-07, #378).
+     * Saves (or deletes, with url = '') the course's Slack/Discord/Teams webhook URL for the
+     * weekly forum digest (FOR-07, #378).
      *
-     * @param int $courseid ID del curso
-     * @param string $webhookurl URL del webhook (vacío para borrar)
+     * @param int $courseid Course ID
+     * @param string $webhookurl Webhook URL (empty to delete)
      * @return array
      */
     public static function execute(int $courseid, string $webhookurl = ''): array {
@@ -78,12 +79,18 @@ class forum_webhook_save extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:manage', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
-        $client = new backend_client();
-        $response = $client->save_forum_webhook($params['courseid'], $params['webhookurl']);
+        $url = trim((string) $params['webhookurl']);
+        if ($url !== '' && !preg_match('#^https?://#i', $url)) {
+            throw new \moodle_exception('errorwebhookurl', 'local_nexusai');
+        }
+        if (\core_text::strlen($url) > 2000) {
+            throw new \moodle_exception('errorwebhookurltoolong', 'local_nexusai', '', 2000);
+        }
 
         return [
-            'webhook_url' => $response['webhook_url'] ?? null,
+            'webhook_url' => \local_nexusai\local\calendar_store::save_webhook((int) $params['courseid'], $url),
         ];
     }
 }

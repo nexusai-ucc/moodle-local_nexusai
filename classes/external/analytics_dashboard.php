@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,10 +17,10 @@
 /**
  * External function `local_nexusai_analytics_dashboard`.
  *
- * Devuelve el dashboard agregado de métricas de un curso para el docente
- * (ANALYTICS-01/02): preguntas más frecuentes, uso diario, distribución de
- * puntajes de quiz y ratio de vacíos de contenido. Solo accesible para
- * usuarios con capability `local/nexusai:manage` (docentes y admins).
+ * Returns a course's aggregated metrics dashboard for the teacher
+ * (ANALYTICS-01/02): most frequent questions, daily usage, quiz score
+ * distribution and content-gaps ratio. Only accessible to users with the
+ * `local/nexusai:manage` capability (teachers and admins).
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -29,77 +29,80 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_multiple_structure;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Devuelve el dashboard agregado de métricas de un curso para el docente (ANALYTICS-01/02): preguntas más
- * frecuentes, uso diario, distribución de puntajes de quiz y ratio de vacíos de contenido.
+ * Returns a course's aggregated metrics dashboard for the teacher (ANALYTICS-01/02): most
+ * frequent questions, daily usage, quiz score distribution and content-gaps ratio.
  */
-class analytics_dashboard extends \external_api {
+class analytics_dashboard extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid' => new \external_value(PARAM_INT, 'ID del curso', VALUE_REQUIRED),
-            'days'     => new \external_value(PARAM_INT, 'Días hacia atrás (1..365)', VALUE_DEFAULT, 30),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid' => new external_value(PARAM_INT, 'Course ID', VALUE_REQUIRED),
+            'days'     => new external_value(PARAM_INT, 'Days back (1..365)', VALUE_DEFAULT, 30),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'course_id'   => new \external_value(PARAM_INT, 'ID del curso'),
-            'period_days' => new \external_value(PARAM_INT, 'Ventana temporal'),
-            'top_queries' => new \external_multiple_structure(
-                new \external_single_structure([
-                    'question' => new \external_value(PARAM_RAW, 'Pregunta'),
-                    'count'    => new \external_value(PARAM_INT, 'Veces preguntada'),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'course_id'   => new external_value(PARAM_INT, 'Course ID'),
+            'period_days' => new external_value(PARAM_INT, 'Time window'),
+            'top_queries' => new external_multiple_structure(
+                new external_single_structure([
+                    'question' => new external_value(PARAM_RAW, 'Question'),
+                    'count'    => new external_value(PARAM_INT, 'Times asked'),
                 ])
             ),
-            'daily_message_counts' => new \external_multiple_structure(
-                new \external_single_structure([
-                    'date'           => new \external_value(PARAM_RAW, 'Fecha (YYYY-MM-DD)'),
-                    'message_count'  => new \external_value(PARAM_INT, 'Mensajes ese día'),
+            'daily_message_counts' => new external_multiple_structure(
+                new external_single_structure([
+                    'date'           => new external_value(PARAM_RAW, 'Date (YYYY-MM-DD)'),
+                    'message_count'  => new external_value(PARAM_INT, 'Messages that day'),
                 ])
             ),
-            'quiz_score_distribution' => new \external_single_structure([
-                'total_attempts' => new \external_value(PARAM_INT, 'Cantidad total de intentos'),
-                'average_score'  => new \external_value(PARAM_FLOAT, 'Puntaje promedio'),
-                'buckets'        => new \external_multiple_structure(
-                    new \external_single_structure([
-                        'range' => new \external_value(PARAM_RAW, 'Rango del bucket (ej. "0-20")'),
-                        'count' => new \external_value(PARAM_INT, 'Intentos en ese rango'),
+            'quiz_score_distribution' => new external_single_structure([
+                'total_attempts' => new external_value(PARAM_INT, 'Total number of attempts'),
+                'average_score'  => new external_value(PARAM_FLOAT, 'Average score'),
+                'buckets'        => new external_multiple_structure(
+                    new external_single_structure([
+                        'range' => new external_value(PARAM_RAW, 'Bucket range (e.g. "0-20")'),
+                        'count' => new external_value(PARAM_INT, 'Attempts in that range'),
                     ])
                 ),
             ]),
-            'gaps_ratio' => new \external_single_structure([
-                'gaps_detected'      => new \external_value(PARAM_INT, 'Vacíos de contenido detectados'),
-                'questions_answered' => new \external_value(PARAM_INT, 'Preguntas respondidas'),
-                'ratio'              => new \external_value(PARAM_FLOAT, 'gaps / (gaps + respondidas)'),
+            'gaps_ratio' => new external_single_structure([
+                'gaps_detected'      => new external_value(PARAM_INT, 'Detected content gaps'),
+                'questions_answered' => new external_value(PARAM_INT, 'Questions answered'),
+                'ratio'              => new external_value(PARAM_FLOAT, 'gaps / (gaps + answered)'),
             ]),
-            'feedback_ratio' => new \external_single_structure([
-                'helpful_count' => new \external_value(PARAM_INT, 'Respuestas marcadas como útiles (👍)'),
-                'total_rated'   => new \external_value(PARAM_INT, 'Total de respuestas votadas'),
-                'useful_pct'    => new \external_value(PARAM_FLOAT, '% marcado como útil'),
+            'feedback_ratio' => new external_single_structure([
+                'helpful_count' => new external_value(PARAM_INT, 'Answers marked helpful (👍)'),
+                'total_rated'   => new external_value(PARAM_INT, 'Total rated answers'),
+                'useful_pct'    => new external_value(PARAM_FLOAT, '% marked helpful'),
             ]),
-            'topics_consulted' => new \external_value(PARAM_INT, 'Preguntas distintas (agrupadas) consultadas en el período'),
+            'topics_consulted' => new external_value(PARAM_INT, 'Distinct (grouped) questions consulted in the period'),
         ]);
     }
 
     /**
-     * Devuelve el dashboard agregado de métricas de un curso para el docente (ANALYTICS-01/02): preguntas más
-     * frecuentes, uso diario, distribución de puntajes de quiz y ratio de vacíos de contenido.
+     * Returns a course's aggregated metrics dashboard for the teacher (ANALYTICS-01/02): most
+     * frequent questions, daily usage, quiz score distribution and content-gaps ratio.
      *
-     * @param int $courseid ID del curso
-     * @param int $days Días hacia atrás (1..365)
+     * @param int $courseid Course ID
+     * @param int $days Days back (1..365)
      * @return array
      */
     public static function execute(int $courseid, int $days = 30): array {
@@ -110,13 +113,13 @@ class analytics_dashboard extends \external_api {
 
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
-        // Solo docentes / admins ven el dashboard de analytics. Los alumnos no.
+        // Only teachers / admins see the analytics dashboard. Students don't.
         require_capability('local/nexusai:manage', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $days = max(1, min(365, (int) $params['days']));
 
-        $client   = new backend_client();
-        $response = $client->analytics_dashboard((int) $params['courseid'], $days);
+        $response = \local_nexusai\local\course_analytics::dashboard((int) $params['courseid'], $days);
 
         $qsd = is_array($response['quiz_score_distribution'] ?? null) ? $response['quiz_score_distribution'] : [];
         $gr  = is_array($response['gaps_ratio'] ?? null) ? $response['gaps_ratio'] : [];

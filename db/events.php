@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,14 +17,14 @@
 /**
  * Event observer registration for local_nexusai.
  *
- * Registra los observadores de eventos de Moodle. Cuando un docente sube un
- * recurso compatible (PDF, DOCX, PPTX, XLSX, CSV, MD, HTML, TXT) a un módulo
- * del curso, el observer lo detecta y lo envía al backend NexusAI para
- * indexación automática.
+ * Registers Moodle's event observers. When a teacher uploads a supported
+ * resource (PDF, DOCX, PPTX, XLSX, CSV, MD, HTML, TXT) to a course module,
+ * the observer detects it and sends it to the NexusAI backend for automatic
+ * indexing.
  *
- * Esto complementa la carga manual desde la vista docente (/documents.php):
- * con este observer, cualquier recurso que el docente suba desde la interfaz
- * estándar de Moodle (Agregar actividad → Archivo) también se indexa.
+ * This complements the manual upload from the teacher view (/documents.php):
+ * with this observer, any resource the teacher uploads from Moodle's
+ * standard interface (Add an activity → File) also gets indexed.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -42,9 +42,41 @@ $observers = [
         'priority'     => 0,
     ],
 
-    // Foros — Épica 06: indexar posts al crear/editar/borrar.
-    // En Moodle 5.x crear una nueva discusión dispara discussion_created (NO post_created).
-    // post_created solo dispara para respuestas a discusiones existentes.
+    // VIS-04: keep the index in step with the activity a document comes from.
+    [
+        'eventname'    => '\core\event\course_module_deleted',
+        'callback'     => '\local_nexusai\observer::course_module_deleted',
+        'includefile'  => null,
+        'internal'     => false,
+        'priority'     => 0,
+    ],
+    [
+        'eventname'    => '\core\event\course_module_updated',
+        'callback'     => '\local_nexusai\observer::course_module_updated',
+        'includefile'  => null,
+        'internal'     => false,
+        'priority'     => 0,
+    ],
+
+    // DATA-05: the plugin tables have no foreign keys; clean up after Moodle deletes a course or a user.
+    [
+        'eventname'    => '\core\event\course_deleted',
+        'callback'     => '\local_nexusai\observer::course_deleted',
+        'includefile'  => null,
+        'internal'     => false,
+        'priority'     => 0,
+    ],
+    [
+        'eventname'    => '\core\event\user_deleted',
+        'callback'     => '\local_nexusai\observer::user_deleted',
+        'includefile'  => null,
+        'internal'     => false,
+        'priority'     => 0,
+    ],
+
+    // Forums — Epic 06: index posts on create/edit/delete.
+    // On Moodle 5.x, creating a new discussion fires discussion_created (NOT post_created).
+    // post_created only fires for replies to existing discussions.
     [
         'eventname'   => '\mod_forum\event\discussion_created',
         'callback'    => '\local_nexusai\observer::forum_discussion_created',

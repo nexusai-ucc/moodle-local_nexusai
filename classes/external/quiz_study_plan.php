@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,9 +17,9 @@
 /**
  * External function `local_nexusai_quiz_study_plan`.
  *
- * Plan de estudio personalizado: combina el historial de errores de quiz
- * del alumno con las preguntas del chat que el material no pudo responder
- * bien, y devuelve una lista unificada de temas débiles rankeada.
+ * Personalized study plan: combines the student's quiz error history with
+ * chat questions the material couldn't answer well, and returns a unified,
+ * ranked list of weak topics.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -28,53 +28,56 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_multiple_structure;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Plan de estudio personalizado: combina el historial de errores de quiz del alumno con las preguntas del
- * chat que el material no pudo responder bien, y devuelve una lista unificada de temas débiles rankeada.
+ * Personalized study plan: combines the student's quiz error history with chat questions the
+ * material couldn't answer well, and returns a unified, ranked list of weak topics.
  */
-class quiz_study_plan extends \external_api {
+class quiz_study_plan extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid' => new \external_value(PARAM_INT, 'ID del curso', VALUE_REQUIRED),
-            'days'     => new \external_value(PARAM_INT, 'Días hacia atrás (1..365)', VALUE_DEFAULT, 30),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid' => new external_value(PARAM_INT, 'Course ID', VALUE_REQUIRED),
+            'days'     => new external_value(PARAM_INT, 'Days back (1..365)', VALUE_DEFAULT, 30),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'course_id' => new \external_value(PARAM_INT, 'ID del curso'),
-            'topics'    => new \external_multiple_structure(
-                new \external_single_structure([
-                    'topic'                => new \external_value(PARAM_RAW, 'Tema débil identificado por la IA'),
-                    'quiz_error_count'     => new \external_value(PARAM_INT, 'Errores de quiz que sustentan este tema'),
-                    'gap_count'            => new \external_value(
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'course_id' => new external_value(PARAM_INT, 'Course ID'),
+            'topics'    => new external_multiple_structure(
+                new external_single_structure([
+                    'topic'                => new external_value(PARAM_RAW, 'Weak topic identified by the AI'),
+                    'quiz_error_count'     => new external_value(PARAM_INT, 'Quiz errors backing this topic'),
+                    'gap_count'            => new external_value(
                         PARAM_INT,
-                        'Preguntas de chat sin responder que sustentan este tema'
+                        'Unanswered chat questions backing this topic'
                     ),
-                    'reason'               => new \external_value(PARAM_RAW, 'Por qué es un tema débil'),
-                    'suggested_quiz_topic' => new \external_value(PARAM_RAW, 'Tema sugerido para precargar el generador de quiz'),
-                    // SP-13 (#323): IDs reales de fila que sustentan el tema — el
-                    // texto de "topic" lo genera el LLM en cada llamada y no es
-                    // una clave estable, así que descartar el tema opera sobre
-                    // estos IDs (ver quiz_study_plan_dismiss.php).
-                    'quiz_error_ids'   => new \external_multiple_structure(
-                        new \external_value(PARAM_ALPHANUMEXT, 'UUID de una fila de quiz_errors')
+                    'reason'               => new external_value(PARAM_RAW, 'Why it\'s a weak topic'),
+                    'suggested_quiz_topic' => new external_value(PARAM_RAW, 'Suggested topic to preload the quiz generator'),
+                    // SP-13 (#323): real row IDs backing the topic — the "topic"
+                    // text is generated by the LLM on every call and isn't a
+                    // stable key, so dismissing the topic operates on these IDs
+                    // (see quiz_study_plan_dismiss.php).
+                    'quiz_error_ids'   => new external_multiple_structure(
+                        new external_value(PARAM_ALPHANUMEXT, 'UUID of a quiz_errors row')
                     ),
-                    'gap_question_ids' => new \external_multiple_structure(
-                        new \external_value(PARAM_ALPHANUMEXT, 'UUID de una fila de unanswered_questions')
+                    'gap_question_ids' => new external_multiple_structure(
+                        new external_value(PARAM_ALPHANUMEXT, 'UUID of an unanswered_questions row')
                     ),
                 ])
             ),
@@ -82,11 +85,11 @@ class quiz_study_plan extends \external_api {
     }
 
     /**
-     * Plan de estudio personalizado: combina el historial de errores de quiz del alumno con las preguntas del
-     * chat que el material no pudo responder bien, y devuelve una lista unificada de temas débiles rankeada.
+     * Personalized study plan: combines the student's quiz error history with chat questions the
+     * material couldn't answer well, and returns a unified, ranked list of weak topics.
      *
-     * @param int $courseid ID del curso
-     * @param int $days Días hacia atrás (1..365)
+     * @param int $courseid Course ID
+     * @param int $days Days back (1..365)
      * @return array
      */
     public static function execute(int $courseid, int $days = 30): array {
@@ -100,6 +103,7 @@ class quiz_study_plan extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:use', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $days = max(1, min(365, (int) $params['days']));
 

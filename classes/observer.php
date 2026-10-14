@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,22 +15,22 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Event observer for local_nexusai — auto-sync on course module creation.
+ * Event observers of local_nexusai.
  *
- * Cuando un docente crea un módulo de tipo "resource" (Archivo) que contiene
- * un formato soportado (PDF, DOCX, PPTX, XLSX, CSV, MD, HTML o TXT), este
- * observer lo envía automáticamente al backend NexusAI para indexación RAG.
+ * No observer calls the NexusAI backend: they run inside the user's request,
+ * so anything that needs the backend is queued as an ad hoc task and runs in
+ * cron (task\sync_forum_post, task\sync_material, task\purge_backend_data).
  *
- * Comportamiento de errores:
- *   - Si el plugin está deshabilitado → skip silencioso.
- *   - Si el módulo no es del tipo "resource" → skip silencioso.
- *   - Si el archivo no tiene un formato soportado → skip silencioso.
- *   - Si el backend falla → log error, NO interrumpe Moodle (excepción atrapada).
+ * - A new "File" activity is offered to the teacher for indexing (a user
+ *   preference read on the next page load), not indexed on its own.
+ * - An updated or deleted "File" activity queues the index sync.
+ * - Forum posts queue their indexing or removal.
+ * - A deleted course or user has its NexusAI rows removed right away; the
+ *   backend's copies are purged by a queued task.
  *
- * Dependencias:
- *   - `local_nexusai\external\backend_client` — envía el archivo al backend.
- *   - Filestore de Moodle — lee los bytes del archivo subido.
- *   - `get_config('local_nexusai', 'enabled')` — switch maestro.
+ * The activity and forum observers skip courses where NexusAI is off (the
+ * deletion ones run anyway, so nothing is left behind), and none interrupts
+ * Moodle if something fails.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -40,10 +40,10 @@
 namespace local_nexusai;
 
 /**
- * Sincroniza automáticamente con el backend NexusAI cuando se crea/edita contenido en Moodle.
+ * Automatically syncs with the NexusAI backend when content is created/edited in Moodle.
  */
 class observer {
-    /** MIME types soportados por el backend (sincronizado con extractor.py). */
+    /** MIME types supported by the backend (kept in sync with extractor.py). */
     const SUPPORTED_MIME_TYPES = [
         'application/pdf',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -56,22 +56,28 @@ class observer {
     ];
 
     /**
-     * Callback para el evento course_module_created.
+     * Callback for the course_module_created event.
      *
-     * Solo procesa módulos de tipo "resource" (Archivo de Moodle). Otros tipos
-     * (forum, quiz, label, etc.) se ignoran silenciosamente.
+     * Only processes modules of type "resource" (Moodle File). Other types
+     * (forum, quiz, label, etc.) are silently ignored.
      *
      * @param \core\event\course_module_created $event
      */
     public static function course_module_created(\core\event\course_module_created $event): void {
-        // Switch maestro: si el plugin está deshabilitado, no hacer nada.
-        if (!get_config('local_nexusai', 'enabled')) {
+        // Off site-wide or in this course: do nothing (CURSO-01).
+        if (!\local_nexusai\local\course_guard::is_enabled((int) $event->courseid)) {
+            return;
+        }
+
+        // NexusAI created this activity itself (VIS-03) and indexes it in the same
+        // step: asking the teacher to confirm it again would be wrong.
+        if (\local_nexusai\local\material_activity::is_creating()) {
             return;
         }
 
         $data = $event->get_data();
 
-        // Solo módulos del tipo "resource" tienen un archivo adjunto.
+        // Only "resource"-type modules have an attached file.
         if (($data['other']['modulename'] ?? '') !== 'resource') {
             return;
         }
@@ -83,7 +89,7 @@ class observer {
         try {
             self::index_resource_module($cmid, $courseid, $userid);
         } catch (\Throwable $e) {
-            // Nunca interrumpir Moodle por un error de indexación.
+            // Never interrupt Moodle because of an indexing error.
             debugging(
                 '[NexusAI] Auto-indexing failed for cmid=' . $cmid . ': ' . $e->getMessage(),
                 DEBUG_NORMAL
@@ -92,149 +98,178 @@ class observer {
     }
 
     /**
-     * Nombre de la user preference donde se acumulan los uploads pendientes de confirmación.
-     * Valor: JSON object {cmid: {courseid, context_id, filename, mimetype}}.
+     * Callback for the course_deleted event (DATA-05): removes the course's NexusAI data.
+     *
+     * Runs even when NexusAI is off, so nothing is left behind.
+     *
+     * @param \core\event\course_deleted $event
+     */
+    public static function course_deleted(\core\event\course_deleted $event): void {
+        try {
+            \local_nexusai\local\data_cleanup::delete_course((int) $event->objectid);
+        } catch (\Throwable $e) {
+            debugging('[NexusAI] Cleanup of course ' . $event->objectid . ' failed: ' . $e->getMessage(), DEBUG_NORMAL);
+        }
+    }
+
+    /**
+     * Callback for the user_deleted event (DATA-05): removes the user's NexusAI data.
+     *
+     * @param \core\event\user_deleted $event
+     */
+    public static function user_deleted(\core\event\user_deleted $event): void {
+        try {
+            \local_nexusai\local\data_cleanup::delete_user((int) $event->objectid);
+        } catch (\Throwable $e) {
+            debugging('[NexusAI] Cleanup of user ' . $event->objectid . ' failed: ' . $e->getMessage(), DEBUG_NORMAL);
+        }
+    }
+
+    /**
+     * Callback for the course_module_deleted event (VIS-04).
+     *
+     * A "File" activity deleted in Moodle stops being used: its document leaves
+     * the index, with its chunks and stored summaries.
+     *
+     * @param \core\event\course_module_deleted $event
+     */
+    public static function course_module_deleted(\core\event\course_module_deleted $event): void {
+        self::sync_resource($event, 'remove');
+    }
+
+    /**
+     * Callback for the course_module_updated event (VIS-04).
+     *
+     * If the file of a "File" activity changed, its document is indexed again.
+     * Renaming the activity or changing its visibility does not touch the index.
+     *
+     * @param \core\event\course_module_updated $event
+     */
+    public static function course_module_updated(\core\event\course_module_updated $event): void {
+        self::sync_resource($event, 'sync');
+    }
+
+    /**
+     * Queues the index sync for a "File" activity event (\local_nexusai\task\sync_material):
+     * the calls to the backend run in cron, never in the teacher's request.
+     *
+     * Skips courses where NexusAI is off, other kinds of activity and what
+     * NexusAI is creating itself.
+     *
+     * @param \core\event\base $event Deleted or updated event of a course module.
+     * @param string $action 'remove' or 'sync'.
+     */
+    private static function sync_resource(\core\event\base $event, string $action): void {
+        $courseid = (int) $event->courseid;
+        if (!\local_nexusai\local\course_guard::is_enabled($courseid)) {
+            return;
+        }
+        if (($event->other['modulename'] ?? '') !== 'resource') {
+            return;
+        }
+        if (\local_nexusai\local\material_activity::is_creating()) {
+            return;
+        }
+
+        \local_nexusai\task\sync_material::queue($action, $courseid, (int) $event->objectid);
+    }
+
+    /**
+     * Name of the user preference where pending-confirmation uploads accumulate.
+     * Value: JSON object {cmid: {courseid, context_id, filename, mimetype}}.
      */
     const PENDING_PREF = 'local_nexusai_pending_uploads';
 
-    // Foros — Épica 06.
+    // Forums — Epic 06.
+    //
+    // The observers only queue \local_nexusai\task\sync_forum_post: the call to
+    // the backend runs in cron, so posting never waits for it (MMR-301 item 10).
 
     /**
-     * Indexa el primer post de una nueva discusión de foro.
+     * Queues the indexing of the first post of a new forum discussion.
      *
-     * En Moodle 5.x crear una discusión dispara discussion_created pero NO post_created.
-     * Leemos el firstpost de la tabla m_forum_discussions para indexar el contenido.
+     * On Moodle 5.x, creating a discussion fires discussion_created but NOT post_created.
+     * We read the firstpost from the m_forum_discussions table.
      *
      * @param \mod_forum\event\discussion_created $event
      */
     public static function forum_discussion_created(\mod_forum\event\discussion_created $event): void {
-        if (!get_config('local_nexusai', 'enabled')) {
+        global $DB;
+
+        if (!\local_nexusai\local\course_guard::is_enabled((int) $event->courseid)) {
             return;
         }
 
-        global $DB;
-
         $discussionid = (int) $event->objectid;
-        $courseid     = (int) $event->courseid;
-
-        try {
-            $discussion = $DB->get_record('forum_discussions', ['id' => $discussionid], 'id, firstpost');
-            if (!$discussion || empty($discussion->firstpost)) {
-                return;
-            }
-            self::index_forum_post_from_event((int) $discussion->firstpost, $courseid, $discussionid);
-        } catch (\Throwable $e) {
-            debugging(
-                '[NexusAI] forum_discussion_created failed for discussion=' . $discussionid . ': ' . $e->getMessage(),
-                DEBUG_NORMAL
-            );
+        $firstpost = (int) $DB->get_field('forum_discussions', 'firstpost', ['id' => $discussionid]);
+        if ($firstpost > 0) {
+            \local_nexusai\task\sync_forum_post::queue('index', $firstpost, (int) $event->courseid, $discussionid);
         }
     }
 
     /**
-     * Indexa el embedding de un post de foro recién creado (respuestas a discusiones existentes).
+     * Queues the indexing of a newly created forum post (replies to existing discussions).
      *
      * @param \mod_forum\event\post_created $event
      */
     public static function forum_post_created(\mod_forum\event\post_created $event): void {
-        if (!get_config('local_nexusai', 'enabled')) {
-            return;
-        }
-        self::index_forum_post_from_event(
-            (int) $event->objectid,
-            (int) $event->courseid,
-            (int) ($event->other['discussionid'] ?? 0)
-        );
+        self::queue_forum_post('index', $event);
     }
 
     /**
-     * Re-indexa el embedding de un post editado.
+     * Queues the re-indexing of an edited post.
      *
-     * El backend compara el content_hash y hace skip si el contenido no cambió.
+     * The backend compares the content_hash and skips it if the content didn't change.
      *
      * @param \mod_forum\event\post_updated $event
      */
     public static function forum_post_updated(\mod_forum\event\post_updated $event): void {
-        if (!get_config('local_nexusai', 'enabled')) {
+        self::queue_forum_post('index', $event);
+    }
+
+    /**
+     * Queues the removal of a deleted post's embedding.
+     *
+     * @param \mod_forum\event\post_deleted $event
+     */
+    public static function forum_post_deleted(\mod_forum\event\post_deleted $event): void {
+        self::queue_forum_post('delete', $event);
+    }
+
+    /**
+     * Queues the sync of the post an event is about.
+     *
+     * Indexing only happens while NexusAI is on for the course. A removal is queued
+     * whenever the backend is configured: the post may have been indexed while the
+     * course had NexusAI on, and it has to leave the backend even if the course was
+     * turned off or is being deleted (MMR-301 item 4).
+     *
+     * @param string $action 'index' or 'delete'.
+     * @param \core\event\base $event A forum post event.
+     */
+    private static function queue_forum_post(string $action, \core\event\base $event): void {
+        $wanted = $action === 'delete'
+            ? \local_nexusai\local\course_guard::can_purge_backend()
+            : \local_nexusai\local\course_guard::is_enabled((int) $event->courseid);
+        if (!$wanted) {
             return;
         }
-        self::index_forum_post_from_event(
+        \local_nexusai\task\sync_forum_post::queue(
+            $action,
             (int) $event->objectid,
             (int) $event->courseid,
             (int) ($event->other['discussionid'] ?? 0)
         );
     }
 
-    /**
-     * Elimina el embedding de un post borrado.
-     *
-     * El post ya no está en la DB cuando este evento dispara, así que solo
-     * necesitamos el post_id para llamar al backend.
-     *
-     * @param \mod_forum\event\post_deleted $event
-     */
-    public static function forum_post_deleted(\mod_forum\event\post_deleted $event): void {
-        if (!get_config('local_nexusai', 'enabled')) {
-            return;
-        }
-
-        $postid = (int) $event->objectid;
-
-        try {
-            $client = new \local_nexusai\external\backend_client();
-            $client->delete_forum_post($postid);
-        } catch (\Throwable $e) {
-            debugging(
-                '[NexusAI] forum_post_deleted failed for post=' . $postid . ': ' . $e->getMessage(),
-                DEBUG_NORMAL
-            );
-        }
-    }
+    // Resource modules (documents).
 
     /**
-     * Lee el contenido del post desde la DB y llama al backend para indexarlo.
-     *
-     * Lógica compartida entre forum_post_created y forum_post_updated.
-     *
-     * @param int $postid       ID de mdl_forum_posts.
-     * @param int $courseid     ID del curso.
-     * @param int $discussionid ID de mdl_forum_discussions.
-     */
-    private static function index_forum_post_from_event(int $postid, int $courseid, int $discussionid): void {
-        global $DB;
-
-        try {
-            $post = $DB->get_record('forum_posts', ['id' => $postid]);
-            if (!$post) {
-                return;
-            }
-
-            // El mensaje se guarda como HTML — strip para texto limpio.
-            $content = trim(strip_tags($post->message ?? ''));
-
-            // Posts muy cortos (botones de "Gracias", etc.) no aportan al RAG.
-            if (strlen($content) < 10) {
-                return;
-            }
-
-            $client = new \local_nexusai\external\backend_client();
-            $client->index_forum_post($postid, $discussionid, $courseid, $content);
-        } catch (\Throwable $e) {
-            debugging(
-                '[NexusAI] forum post indexing failed for post=' . $postid . ': ' . $e->getMessage(),
-                DEBUG_NORMAL
-            );
-        }
-    }
-
-    // Módulos de recurso (documentos).
-
-    /**
-     * Lee el archivo adjunto del módulo resource y guarda un upload pendiente de confirmación.
+     * Reads the resource module's attached file and saves a pending-confirmation upload.
      *
      * @param int $cmid     Course module ID.
      * @param int $courseid Course ID.
-     * @param int $userid   ID del usuario que creó el módulo (el docente).
+     * @param int $userid   ID of the user who created the module (the teacher).
      */
     private static function index_resource_module(int $cmid, int $courseid, int $userid): void {
         global $CFG, $USER;
@@ -259,8 +294,8 @@ class observer {
 
         $filename = $file->get_filename();
 
-        // En lugar de indexar automáticamente, guardamos la info en una user preference
-        // para que el docente confirme en el próximo page load (modal de confirmación).
+        // Instead of indexing automatically, we save the info in a user preference
+        // so the teacher can confirm it on the next page load (confirmation modal).
         $raw     = get_user_preferences(self::PENDING_PREF, '{}', $userid);
         $pending = json_decode($raw, true);
         if (!is_array($pending)) {
