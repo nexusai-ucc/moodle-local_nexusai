@@ -1,22 +1,50 @@
+// This file is part of Moodle - https://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
+
 /**
- * Conversor a formato GIFT de Moodle (EVAL-02, issue #235).
+ * Part of the NexusAI plugin (local_nexusai).
  *
- * GIFT es el formato de texto plano que Moodle usa para importar preguntas
- * al banco de preguntas de un curso (Site administration → Question bank →
- * Import). La conversión y la descarga se hacen enteramente en el browser —
- * no hay round-trip al backend para esto.
- *
- * Referencia: https://docs.moodle.org/en/GIFT_format
+ * @copyright  2026 NexusAI Team — UCC
+ * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-// Caracteres con significado especial en GIFT que hay que escapar dentro de
-// texto de pregunta/respuesta: ~ = # { } y el propio backslash.
+/**
+ * Converter to Moodle's GIFT format (EVAL-02, issue #235).
+ *
+ * GIFT is the plain-text format Moodle uses to import questions into a
+ * course's question bank (Site administration → Question bank →
+ * Import). The conversion and the download happen entirely in the browser —
+ * there is no round-trip to the backend for this.
+ *
+ * Reference: https://docs.moodle.org/en/GIFT_format
+ */
+
+// Characters with a special meaning in GIFT that must be escaped inside
+// question/answer text: ~ = # { } and the backslash itself.
 function escapeGift(text) {
     return String(text ?? "").replace(/[\\~=#{}]/g, (ch) => `\\${ch}`);
 }
 
-function questionToGift(q, index) {
-    const title = `Pregunta ${index + 1}`;
+const GIFT_TEXT = {
+    es: { title: (n) => `Pregunta ${n}`, modelAnswer: "Respuesta modelo" },
+    en: { title: (n) => `Question ${n}`, modelAnswer: "Model answer" },
+};
+
+function questionToGift(q, index, lang) {
+    const T = GIFT_TEXT[lang] || GIFT_TEXT.es;
+    const title = T.title(index + 1);
     const stem = escapeGift(q.question);
 
     if (q.question_type === "true_false") {
@@ -26,14 +54,14 @@ function questionToGift(q, index) {
     }
 
     if (q.question_type === "open") {
-        // GIFT no tiene "pregunta abierta evaluada por IA" — se exporta como
-        // essay (grading manual en Moodle). La respuesta modelo va como
-        // comentario del docente, no como parte del bloque de respuesta.
-        const modelAnswer = q.explanation ? `\n// Respuesta modelo: ${q.explanation.replace(/\n/g, " ")}` : "";
+        // GIFT has no "open question graded by AI" — it is exported as an
+        // essay (manual grading in Moodle). The model answer goes as a
+        // teacher comment, not as part of the answer block.
+        const modelAnswer = q.explanation ? `\n// ${T.modelAnswer}: ${q.explanation.replace(/\n/g, " ")}` : "";
         return `::${title}::${stem} {}${modelAnswer}`;
     }
 
-    // multiple_choice (y cualquier otro tipo con options, por si "mix" trae algo inesperado)
+    // multiple_choice (and any other type with options, in case "mix" brings something unexpected)
     const options = (q.options || []).map((opt, i) => {
         const marker = i === q.correct_index ? "=" : "~";
         return `${marker}${escapeGift(opt)}`;
@@ -42,29 +70,32 @@ function questionToGift(q, index) {
 }
 
 /**
- * Convierte una lista de preguntas (shape QuizQuestion del backend) a un
- * string GIFT completo, listo para descargar como .txt.
+ * Converts a list of questions (the backend's QuizQuestion shape) to a
+ * complete GIFT string, ready to download as .txt.
  *
  * @param {Array} questions
+ * @param {string} [lang] 'es' | 'en' — language of the generated titles/comments.
  * @returns {string}
  */
-export function toGiftFormat(questions) {
-    return questions.map((q, i) => questionToGift(q, i)).join("\n\n") + "\n";
+export function toGiftFormat(questions, lang = "es") {
+    return questions.map((q, i) => questionToGift(q, i, lang)).join("\n\n") + "\n";
 }
 
 /**
- * Dispara la descarga de un archivo .txt GIFT en el browser (sin request al server).
+ * Fires the download of a GIFT .txt file in the browser (no request to the server).
  *
  * @param {Array} questions
  * @param {string} [filename]
+ * @param {string} [lang] 'es' | 'en'
  */
-export function downloadGiftFile(questions, filename = "examen-nexusai.txt") {
-    const content = toGiftFormat(questions);
+export function downloadGiftFile(questions, filename, lang = "es") {
+    const name = filename || (lang === "es" ? "examen-nexusai.txt" : "exam-nexusai.txt");
+    const content = toGiftFormat(questions, lang);
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = filename;
+    link.download = name;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

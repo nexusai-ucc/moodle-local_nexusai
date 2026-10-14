@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,10 +17,10 @@
 /**
  * External function `local_nexusai_document_pre_exam_summary`.
  *
- * Proxy entre React y el endpoint /api/v1/documents/pre-exam-summary del
- * backend Python. Genera un resumen de repaso combinando todo el material
- * indexado relevante para un próximo examen, opcionalmente acotado a una
- * unidad/sección del curso (BUS-04).
+ * Proxy between React and the Python backend's
+ * /api/v1/documents/pre-exam-summary endpoint. Generates a review summary
+ * combining all relevant indexed material for an upcoming exam, optionally
+ * scoped to a course unit/section (BUS-04).
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -29,48 +29,51 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_multiple_structure;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Proxy entre React y el endpoint /api/v1/documents/pre-exam-summary del backend Python.
+ * Proxy between React and the Python backend's /api/v1/documents/pre-exam-summary endpoint.
  */
-class document_pre_exam_summary extends \external_api {
+class document_pre_exam_summary extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid' => new \external_value(PARAM_INT, 'ID del curso de Moodle', VALUE_REQUIRED),
-            'section'  => new \external_value(PARAM_INT, 'Unidad/sección opcional', VALUE_DEFAULT, null, NULL_ALLOWED),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid' => new external_value(PARAM_INT, 'Moodle course ID', VALUE_REQUIRED),
+            'section'  => new external_value(PARAM_INT, 'Optional unit/section', VALUE_DEFAULT, null, NULL_ALLOWED),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'summary'          => new \external_value(PARAM_RAW, 'Resumen de repaso generado por IA'),
-            'documents_used'   => new \external_multiple_structure(
-                new \external_single_structure([
-                    'document_id' => new \external_value(PARAM_RAW, 'UUID del documento'),
-                    'filename'    => new \external_value(PARAM_TEXT, 'Nombre del archivo'),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'summary'          => new external_value(PARAM_RAW, 'AI-generated review summary'),
+            'documents_used'   => new external_multiple_structure(
+                new external_single_structure([
+                    'document_id' => new external_value(PARAM_RAW, 'Document UUID'),
+                    'filename'    => new external_value(PARAM_TEXT, 'File name'),
                 ])
             ),
-            'total_documents'  => new \external_value(PARAM_INT, 'Cantidad de documentos usados'),
+            'total_documents'  => new external_value(PARAM_INT, 'Number of documents used'),
         ]);
     }
 
     /**
-     * Proxy entre React y el endpoint /api/v1/documents/pre-exam-summary del backend Python.
+     * Proxy between React and the Python backend's /api/v1/documents/pre-exam-summary endpoint.
      *
-     * @param int $courseid ID del curso de Moodle
-     * @param int $section Unidad/sección opcional
+     * @param int $courseid Moodle course ID
+     * @param int $section Optional unit/section
      * @return array
      */
     public static function execute(int $courseid, ?int $section = null): array {
@@ -84,6 +87,7 @@ class document_pre_exam_summary extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:use', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $client   = new backend_client();
         $response = $client->pre_exam_summary(

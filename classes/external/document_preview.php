@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,9 +17,9 @@
 /**
  * External function `local_nexusai_document_preview`.
  *
- * Devuelve los primeros caracteres del texto extraído de un documento
- * indexado (CONT-08 / #357). La vista docente lo muestra bajo demanda para
- * que el docente confirme que la extracción capturó contenido real.
+ * Returns the first characters of an indexed document's extracted text
+ * (CONT-08 / #357). The teacher view shows it on demand so the teacher can
+ * confirm the extraction captured real content.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -28,47 +28,48 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Devuelve los primeros caracteres del texto extraído de un documento indexado (CONT-08 / #357).
+ * Returns the first characters of an indexed document's extracted text (CONT-08 / #357).
  */
-class document_preview extends \external_api {
+class document_preview extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid'   => new \external_value(PARAM_INT, 'ID del curso (para validar capability)', VALUE_REQUIRED),
-            'documentid' => new \external_value(PARAM_ALPHANUMEXT, 'UUID del documento', VALUE_REQUIRED),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid'   => new external_value(PARAM_INT, 'Course ID (to validate the capability)', VALUE_REQUIRED),
+            'documentid' => new external_value(PARAM_ALPHANUMEXT, 'Document UUID', VALUE_REQUIRED),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'document_id' => new \external_value(PARAM_ALPHANUMEXT, 'UUID del documento'),
-            'filename'    => new \external_value(PARAM_RAW, 'Nombre del archivo'),
-            'status'      => new \external_value(PARAM_ALPHA, 'pending | indexing | indexed | error'),
-            'preview'     => new \external_value(PARAM_RAW, 'Texto extraído recortado, o null si todavía no hay', VALUE_OPTIONAL),
-            'char_count'  => new \external_value(PARAM_INT, 'Cantidad de caracteres del preview'),
-            'truncated'   => new \external_value(PARAM_BOOL, 'True si el texto extraído es más largo que el preview'),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'document_id' => new external_value(PARAM_ALPHANUMEXT, 'Document UUID'),
+            'filename'    => new external_value(PARAM_RAW, 'File name'),
+            'status'      => new external_value(PARAM_ALPHA, 'pending | indexing | indexed | error'),
+            'preview'     => new external_value(PARAM_RAW, 'Trimmed extracted text, or null if not available yet', VALUE_OPTIONAL),
+            'char_count'  => new external_value(PARAM_INT, 'Number of characters in the preview'),
+            'truncated'   => new external_value(PARAM_BOOL, 'True if the extracted text is longer than the preview'),
         ]);
     }
 
     /**
-     * Devuelve los primeros caracteres del texto extraído de un documento indexado (CONT-08 / #357).
+     * Returns the first characters of an indexed document's extracted text (CONT-08 / #357).
      *
-     * @param int $courseid ID del curso (para validar capability)
-     * @param string $documentid UUID del documento
+     * @param int $courseid Course ID (to validate the capability)
+     * @param string $documentid Document UUID
      * @return array
      */
     public static function execute(int $courseid, string $documentid): array {
@@ -80,13 +81,14 @@ class document_preview extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:manage', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $client   = new backend_client();
         $response = $client->get_document_preview($params['documentid']);
 
-        // Defensa: el documento tiene que pertenecer al curso solicitado, para
-        // que un docente no pueda leer material de otro curso pasando otro
-        // courseid junto al UUID.
+        // Defense: the document has to belong to the requested course, so a
+        // teacher can't read material from another course by passing a
+        // different courseid alongside the UUID.
         if (((int) ($response['course_id'] ?? 0)) !== (int) $params['courseid']) {
             throw new \moodle_exception(
                 'errorbackend',

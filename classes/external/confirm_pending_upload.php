@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,9 +17,9 @@
 /**
  * External function `local_nexusai_confirm_pending_upload`.
  *
- * El docente confirmó que quiere indexar un archivo en NexusAI.
- * Lee el archivo del filestore de Moodle y lo envía al backend para indexación RAG.
- * Elimina la entrada de la user preference al finalizar (éxito o error).
+ * The teacher confirmed they want to index a file in NexusAI.
+ * Reads the file from Moodle's filestore and sends it to the backend for RAG indexing.
+ * Removes the entry from the user preference when done (success or error).
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -28,42 +28,43 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * El docente confirmó que quiere indexar un archivo en NexusAI.
+ * The teacher confirmed they want to index a file in NexusAI.
  */
-class confirm_pending_upload extends \external_api {
+class confirm_pending_upload extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid' => new \external_value(PARAM_INT, 'ID del curso', VALUE_REQUIRED),
-            'cmid'     => new \external_value(PARAM_INT, 'Course module ID del recurso a indexar', VALUE_REQUIRED),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid' => new external_value(PARAM_INT, 'Course ID', VALUE_REQUIRED),
+            'cmid'     => new external_value(PARAM_INT, 'Course module ID of the resource to index', VALUE_REQUIRED),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'success' => new \external_value(PARAM_BOOL, 'true si se indexó correctamente'),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'success' => new external_value(PARAM_BOOL, 'true if indexed successfully'),
         ]);
     }
 
     /**
-     * El docente confirmó que quiere indexar un archivo en NexusAI.
+     * The teacher confirmed they want to index a file in NexusAI.
      *
-     * @param int $courseid ID del curso
-     * @param int $cmid Course module ID del recurso a indexar
+     * @param int $courseid Course ID
+     * @param int $cmid Course module ID of the resource to index
      * @return array
      */
     public static function execute(int $courseid, int $cmid): array {
@@ -77,8 +78,9 @@ class confirm_pending_upload extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:manage', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
-        // Leer y validar la preference del usuario actual.
+        // Read and validate the current user's preference.
         $raw     = get_user_preferences(\local_nexusai\observer::PENDING_PREF, '{}');
         $pending = json_decode($raw, true);
         if (!is_array($pending)) {
@@ -92,8 +94,8 @@ class confirm_pending_upload extends \external_api {
             throw new \moodle_exception('errorbackend', 'local_nexusai', '', 'Pending upload not found for this course/cmid');
         }
 
-        // Siempre limpiar la preference antes de cualquier operación que pueda fallar,
-        // para no dejar entradas "zombie" si el archivo ya no existe.
+        // Always clear the preference before any operation that could fail,
+        // so we don't leave "zombie" entries if the file no longer exists.
         unset($pending[$key]);
         set_user_preference(\local_nexusai\observer::PENDING_PREF, json_encode($pending));
 
@@ -101,7 +103,7 @@ class confirm_pending_upload extends \external_api {
         $mimetype   = (string) $entry['mimetype'];
         $filename   = (string) $entry['filename'];
 
-        // Leer el archivo del filestore de Moodle.
+        // Read the file from Moodle's filestore.
         $fs    = get_file_storage();
         $files = $fs->get_area_files($contextid, 'mod_resource', 'content', false, 'itemid, filepath, filename', false);
 
@@ -116,10 +118,11 @@ class confirm_pending_upload extends \external_api {
             throw new \moodle_exception('errorbackend', 'local_nexusai', '', 'File content is empty');
         }
 
-        // BUS-05: el archivo ya vive en una sección real del curso (fue subido
-        // vía Moodle nativo, no por el drag-and-drop de React) — se deriva del
-        // cmid, sin pedirle nada al docente. Degrada a null si el cmid quedó
-        // huérfano/inválido; no debe bloquear la confirmación.
+        // BUS-05: the file already lives in a real course section (it was
+        // uploaded via native Moodle, not React's drag-and-drop) — it's
+        // derived from the cmid, without asking the teacher anything.
+        // Degrades to null if the cmid ended up orphaned/invalid; it must
+        // not block the confirmation.
         $section = null;
         try {
             $cm = get_fast_modinfo($params['courseid'])->get_cm($params['cmid']);
@@ -135,11 +138,12 @@ class confirm_pending_upload extends \external_api {
             $filename,
             $mimetype,
             $filebytes,
-            $section
+            $section,
+            $params['cmid']
         );
 
-        // CAL-03 (issue #239): notificar a los usuarios del curso que hay
-        // material nuevo. Best-effort — nunca puede romper la confirmación.
+        // CAL-03 (issue #239): notify the course's users that there's new
+        // material. Best-effort — must never break the confirmation.
         \local_nexusai\notifier::notify_new_material(
             $params['courseid'],
             $filename,

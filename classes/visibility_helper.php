@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,15 +15,15 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Regla de visibilidad compartida del widget (UX-02).
+ * Widget's shared visibility rule (UX-02).
  *
- * Antes de UX-02, el widget solo existía dentro de páginas de curso real
- * ($COURSE->id > 1) — ese guard vivía inline en before_footer_listener.php.
- * UX-02 suma un segundo punto de inyección (el ícono de la navbar primaria,
- * classes/hook/navigation/primary_extend_listener.php) que debe decidir
- * exactamente lo mismo que el footer: si el ícono existe pero el contenedor
- * del panel no, el click no hace nada. Esta clase es la única fuente de
- * verdad que ambos hooks consultan.
+ * Before UX-02, the widget only existed within real course pages
+ * ($COURSE->id > 1) — that guard lived inline in before_footer_listener.php.
+ * UX-02 adds a second injection point (the primary navbar icon,
+ * classes/hook/navigation/primary_extend_listener.php) that must decide
+ * exactly the same thing as the footer: if the icon exists but the panel
+ * container doesn't, the click does nothing. This class is the single
+ * source of truth both hooks consult.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -33,33 +33,56 @@
 namespace local_nexusai;
 
 /**
- * Regla única de visibilidad del widget de NexusAI, compartida por before_footer_listener
- * y primary_extend_listener para que nunca haya un ícono clickeable sin panel detrás.
+ * Single visibility rule for the NexusAI widget, shared by before_footer_listener
+ * and primary_extend_listener so there's never a clickable icon without a panel behind it.
  */
 class visibility_helper {
     /**
-     * Resuelve si el usuario actual debe ver el widget en la página actual y,
-     * si es dentro de un curso real, si tiene la capability para usarlo.
+     * Page layouts where a floating chat widget cannot work or does not belong:
+     * iframes (LTI/H5P), popups, print view, redirects, install/upgrade screens
+     * and the quiz secure window.
+     */
+    const EXCLUDED_LAYOUTS = ['embedded', 'popup', 'frametop', 'print', 'redirect', 'maintenance', 'secure'];
+
+    /**
+     * Resolves whether the current user should see the widget on the current
+     * page and, if inside a real course, whether they have the capability to use it.
      *
-     * Reglas:
-     *   - Logueado y no invitado, siempre.
-     *   - Dentro de un curso real ($COURSE->id > 1): requiere además
-     *     `local/nexusai:use` en ese curso — si no la tiene, no se muestra
-     *     nada (ni ícono ni panel), igual que antes de UX-02.
-     *   - Fuera de curso (dashboard, home, admin, etc.): se muestra igual,
-     *     con courseid=0 — el panel entra a un estado vacío en vez de
-     *     intentar usar un curso inexistente.
+     * Rules:
+     *   - Logged in and not a guest, always.
+     *   - Never while Moodle is installing or upgrading, on a page layout in
+     *     EXCLUDED_LAYOUTS, or while the backend connection is not filled in
+     *     (the chat could not answer anything).
+     *   - Inside a real course ($COURSE->id > 1): NexusAI must be on for the
+     *     course (course_guard, which also checks the site-wide switch) and the
+     *     user needs `local/nexusai:use` there — otherwise nothing is shown
+     *     (neither icon nor panel).
+     *   - Outside a course (dashboard, home, admin, etc.): only when the admin
+     *     turned on "show outside courses", with courseid=0 — the panel enters
+     *     an empty state instead of trying to use a nonexistent course.
      *
-     * @return array{courseid:int, isteacher:bool}|null null si no corresponde mostrar nada.
+     * @return array{courseid:int, isteacher:bool}|null null if nothing should be shown.
      */
     public static function resolve(): ?array {
-        global $COURSE;
+        global $COURSE, $PAGE, $CFG;
 
         if (!isloggedin() || isguestuser()) {
             return null;
         }
+        if (during_initial_install() || !empty($CFG->upgraderunning)) {
+            return null;
+        }
+        if (in_array($PAGE->pagelayout, self::EXCLUDED_LAYOUTS, true)) {
+            return null;
+        }
+        if (!local\course_guard::backend_configured()) {
+            return null;
+        }
 
         if (!empty($COURSE->id) && $COURSE->id > 1) {
+            if (!local\course_guard::is_enabled((int) $COURSE->id)) {
+                return null;
+            }
             $context = \context_course::instance($COURSE->id);
             if (!has_capability('local/nexusai:use', $context)) {
                 return null;
@@ -71,6 +94,10 @@ class visibility_helper {
             ];
         }
 
+        if (!local\course_guard::show_outside_course()) {
+            return null;
+        }
+
         return [
             'courseid'  => 0,
             'isteacher' => false,
@@ -78,16 +105,16 @@ class visibility_helper {
     }
 
     /**
-     * ONB-03: detecta si la página actual es la de **crear un curso nuevo** y
-     * el usuario puede crearlo. En ese caso el widget muestra el tutorial de
-     * armado de curso en vez del cartel de "no hay curso".
+     * ONB-03: detects whether the current page is **create a new course**
+     * and the user can create it. In that case the widget shows the
+     * course-setup tutorial instead of the "no course" placeholder.
      *
-     * La pantalla de crear y la de editar comparten `$PAGE->pagetype`
-     * (`course-edit`, verificado contra Moodle 4.1 — ver ADR-010). La
-     * distinción es por parámetro: sin `id` = crear, con `id` = editar
-     * (modo revisión, ONB-04).
+     * The create and edit screens share `$PAGE->pagetype`
+     * (`course-edit`, verified against Moodle 4.1 — see ADR-010). The
+     * distinction is by parameter: no `id` = create, with `id` = edit
+     * (review mode, ONB-04).
      *
-     * @return string|null 'create-course', 'review-course' o null.
+     * @return string|null 'create-course', 'review-course' or null.
      */
     public static function onboarding_hint(): ?string {
         global $PAGE, $COURSE;
@@ -99,10 +126,10 @@ class visibility_helper {
         $editid = optional_param('id', 0, PARAM_INT);
 
         if ($editid > 0) {
-            // ONB-04: editar un curso existente. require_login($course) en
-            // course/edit.php ya deja $COURSE seteado al curso editado antes
-            // de que corra el hook de footer — mismo mecanismo del que
-            // depende resolve() para el widget normal.
+            // ONB-04: editing an existing course. require_login($course) in
+            // course/edit.php already leaves $COURSE set to the edited
+            // course before the footer hook runs — the same mechanism
+            // resolve() depends on for the normal widget.
             if (empty($COURSE->id) || (int) $COURSE->id !== $editid) {
                 return null;
             }
@@ -112,13 +139,14 @@ class visibility_helper {
                 return null;
             }
 
-            // ONB-05: si el docente ya cerró el tutorial para este curso, no
-            // se vuelve a mostrar solo — sigue accesible a mano desde el tab
-            // "Revisión del curso" del widget normal (ONB-06). Sin esto, esta
-            // página caería en el widget normal (ChatApp) para ese curso.
-            // Se reusa el mismo accessor que la external function, en vez de
-            // reconstruir a mano la key de user_preferences, para que ambos
-            // no puedan divergir si el storage del dismissal cambia.
+            // ONB-05: if the teacher already closed the tutorial for this
+            // course, it isn't auto-shown again — it stays reachable by hand
+            // from the "Course review" tab of the normal widget (ONB-06).
+            // Without this, this page would fall back to the normal widget
+            // (ChatApp) for that course. We reuse the same accessor as the
+            // external function, instead of rebuilding the user_preferences
+            // key by hand, so the two can't diverge if the dismissal storage
+            // changes.
             if (\local_nexusai\external\onboarding_state_get::read_state((int) $COURSE->id)['dismissed']) {
                 return null;
             }

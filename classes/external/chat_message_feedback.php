@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,10 +17,10 @@
 /**
  * External function `local_nexusai_chat_message_feedback`.
  *
- * ASIST-01 (#321): guarda el voto 👍/👎 del alumno sobre una respuesta
- * puntual del asistente, ligado a `messages.id`. Anónimo por diseño del
- * lado del backend — este proxy solo resuelve $USER->id real del server
- * (nunca confía en un userid del cliente) antes de mandarlo a hashear.
+ * ASIST-01 (#321): saves the student's 👍/👎 vote on a specific assistant
+ * answer, tied to `messages.id`. Anonymous by design on the backend side
+ * — this proxy only resolves the real server-side $USER->id (never trusts
+ * a client-supplied userid) before sending it off to be hashed.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -29,47 +29,49 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * ASIST-01 (#321): guarda el voto 👍/👎 del alumno sobre una respuesta puntual del asistente, ligado a
+ * ASIST-01 (#321): saves the student's 👍/👎 vote on a specific assistant answer, tied to
  * `messages.id`.
  */
-class chat_message_feedback extends \external_api {
+class chat_message_feedback extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid'  => new \external_value(PARAM_INT, 'ID del curso', VALUE_REQUIRED),
-            'messageid' => new \external_value(PARAM_ALPHANUMEXT, 'ID del mensaje (UUID)', VALUE_REQUIRED),
-            'ishelpful' => new \external_value(PARAM_BOOL, 'true = 👍, false = 👎', VALUE_REQUIRED),
-            'comment'   => new \external_value(PARAM_TEXT, 'Comentario corto opcional (solo con 👎)', VALUE_DEFAULT, ''),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid'  => new external_value(PARAM_INT, 'Course ID', VALUE_REQUIRED),
+            'messageid' => new external_value(PARAM_ALPHANUMEXT, 'Message ID (UUID)', VALUE_REQUIRED),
+            'ishelpful' => new external_value(PARAM_BOOL, 'true = 👍, false = 👎', VALUE_REQUIRED),
+            'comment'   => new external_value(PARAM_TEXT, 'Optional short comment (only with 👎)', VALUE_DEFAULT, ''),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'ok' => new \external_value(PARAM_BOOL, 'true si se guardó correctamente'),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'ok' => new external_value(PARAM_BOOL, 'true if saved successfully'),
         ]);
     }
 
     /**
-     * ASIST-01 (#321): guarda el voto 👍/👎 del alumno sobre una respuesta puntual del asistente, ligado a
+     * ASIST-01 (#321): saves the student's 👍/👎 vote on a specific assistant answer, tied to
      * `messages.id`.
      *
-     * @param int $courseid ID del curso
-     * @param string $messageid ID del mensaje (UUID)
+     * @param int $courseid Course ID
+     * @param string $messageid Message ID (UUID)
      * @param bool $ishelpful true = 👍, false = 👎
-     * @param string $comment Comentario corto opcional (solo con 👎)
+     * @param string $comment Optional short comment (only with 👎)
      * @return array
      */
     public static function execute(int $courseid, string $messageid, bool $ishelpful, string $comment = ''): array {
@@ -85,23 +87,23 @@ class chat_message_feedback extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:use', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $cleancomment = trim($params['comment']);
         if (mb_strlen($cleancomment) > 1000) {
             $cleancomment = mb_substr($cleancomment, 0, 1000);
         }
 
-        $client   = new backend_client();
-        $response = $client->submit_message_feedback(
-            $params['messageid'],
-            (int) $params['courseid'],
+        $message = \local_nexusai\local\chat_store::record_feedback(
             (int) $USER->id,
+            (int) $params['courseid'],
+            $params['messageid'],
             (bool) $params['ishelpful'],
             $cleancomment !== '' ? $cleancomment : null
         );
 
         return [
-            'ok' => (bool) ($response['ok'] ?? true),
+            'ok' => $message !== null,
         ];
     }
 }

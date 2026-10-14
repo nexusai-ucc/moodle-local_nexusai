@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,8 +17,8 @@
 /**
  * External function `local_nexusai_forum_suggest_reply`.
  *
- * Lee el hilo de foro desde Moodle DB y le pide al backend que genere
- * una sugerencia de respuesta usando RAG + LLM (F-05 / F-11).
+ * Reads the forum thread from the Moodle DB and asks the backend to generate
+ * a reply suggestion using RAG + LLM (F-05 / F-11).
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -27,58 +27,58 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Lee el hilo de foro desde Moodle DB y le pide al backend que genere una sugerencia de respuesta usando RAG
- * + LLM (F-05 / F-11).
+ * Reads the forum thread from the Moodle DB and asks the backend to generate a reply
+ * suggestion using RAG + LLM (F-05 / F-11).
  */
-class forum_suggest_reply extends \external_api {
-    /** @var int Máximo de posts del hilo que se envían al backend como contexto. */
+class forum_suggest_reply extends external_api {
+    /** @var int Max thread posts sent to the backend as context. */
     const MAX_POSTS = 30;
 
-    /** @var int Truncado por post para no inflar el contexto del LLM. */
+    /** @var int Per-post truncation so as not to inflate the LLM's context. */
     const MAX_CHARS_PER_POST = 1000;
 
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'discussionid'  => new \external_value(PARAM_INT, 'ID de la discusión de foro', VALUE_REQUIRED),
-            'courseid'      => new \external_value(PARAM_INT, 'ID del curso de Moodle', VALUE_REQUIRED),
-            'replytopostid' => new \external_value(PARAM_INT, 'ID del post al que se responde', VALUE_REQUIRED),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'discussionid'  => new external_value(PARAM_INT, 'Forum discussion ID', VALUE_REQUIRED),
+            'courseid'      => new external_value(PARAM_INT, 'Moodle course ID', VALUE_REQUIRED),
+            'replytopostid' => new external_value(PARAM_INT, 'ID of the post being replied to', VALUE_REQUIRED),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'suggested_reply'     => new \external_value(PARAM_RAW, 'Texto sugerido por el LLM'),
-            'has_course_material' => new \external_value(PARAM_BOOL, 'Si el RAG encontró material relevante del curso'),
-            'sources_used'        => new \external_value(PARAM_INT, 'Cantidad de chunks del curso usados'),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'suggested_reply'     => new external_value(PARAM_RAW, 'Text suggested by the LLM'),
+            'has_course_material' => new external_value(PARAM_BOOL, 'Whether RAG found relevant course material'),
+            'sources_used'        => new external_value(PARAM_INT, 'Number of course chunks used'),
         ]);
     }
 
     /**
-     * Lee el hilo de foro desde Moodle DB y le pide al backend que genere una sugerencia de respuesta usando
-     * RAG + LLM (F-05 / F-11).
+     * Reads the forum thread from the Moodle DB and asks the backend to generate a reply
+     * suggestion using RAG + LLM (F-05 / F-11).
      *
-     * @param int $discussionid ID de la discusión de foro
-     * @param int $courseid ID del curso de Moodle
-     * @param int $replytopostid ID del post al que se responde
+     * @param int $discussionid Forum discussion ID
+     * @param int $courseid Moodle course ID
+     * @param int $replytopostid ID of the post being replied to
      * @return array
      */
     public static function execute(int $discussionid, int $courseid, int $replytopostid): array {
-        global $DB;
-
         $params = self::validate_parameters(self::execute_parameters(), [
             'discussionid'  => $discussionid,
             'courseid'      => $courseid,
@@ -88,22 +88,20 @@ class forum_suggest_reply extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:use', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
-        // Verificar que la discusión pertenece al curso.
-        $DB->get_record('forum_discussions', [
-            'id'     => (int) $params['discussionid'],
-            'course' => (int) $params['courseid'],
-        ], 'id', MUST_EXIST);
+        // Verify the discussion belongs to the course and the current user can actually
+        // see it (capability, group separation, hidden/timed discussions — MMR-301 item 2).
+        $discussion = \local_nexusai\local\forum_access_guard::require_can_view_discussion(
+            (int) $params['discussionid'],
+            (int) $params['courseid']
+        );
 
-        // Leer todos los posts del hilo en orden cronológico.
-        $sql = "SELECT fp.id, fp.message, fp.created,
-                       " . $DB->sql_fullname('u.firstname', 'u.lastname') . " AS author
-                  FROM {forum_posts} fp
-                  JOIN {user} u ON u.id = fp.userid
-                 WHERE fp.discussion = :discussionid
-              ORDER BY fp.created ASC";
-
-        $rows = $DB->get_records_sql($sql, ['discussionid' => (int) $params['discussionid']]);
+        // The thread's posts this user can see (private replies to others, Q&A forums),
+        // in chronological order. Private replies are left out even when the user can read
+        // them: the suggestion is a draft for a public reply.
+        // Authors go out as pseudonyms (forum_author_alias): no name leaves Moodle.
+        $rows = \local_nexusai\local\forum_access_guard::visible_posts($discussion, 0, false, self::MAX_POSTS);
 
         if (empty($rows)) {
             return [
@@ -114,6 +112,7 @@ class forum_suggest_reply extends \external_api {
         }
 
         $posts    = [];
+        $aliases  = new \local_nexusai\local\forum_author_alias();
         $question = '';
         $count    = 0;
 
@@ -130,7 +129,7 @@ class forum_suggest_reply extends \external_api {
                 continue;
             }
 
-            // Identificar el post al que se responde para usarlo como "pregunta" en el RAG.
+            // Identify the post being replied to, to use it as the "question" in the RAG.
             if ((int)$row->id === (int)$params['replytopostid']) {
                 $question = mb_substr($content, 0, 2000);
             }
@@ -141,13 +140,13 @@ class forum_suggest_reply extends \external_api {
 
             $posts[] = [
                 'post_id' => (int) $row->id,
-                'author'  => (string) $row->author,
+                'author'  => $aliases->for_user((int) $row->userid),
                 'content' => $content,
             ];
             $count++;
         }
 
-        // Si no encontramos el post de destino, usamos el primero del hilo.
+        // If we didn't find the target post, use the first one in the thread.
         if (empty($question) && !empty($posts)) {
             $question = $posts[0]['content'];
         }

@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,29 +15,29 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Proxy streaming Server-Sent Events entre el browser y el backend FastAPI.
+ * Server-Sent Events streaming proxy between the browser and the FastAPI backend.
  *
- * Por qué NO es una External Function:
- *   `core/ajax` y el sistema de External Functions de Moodle no soportan
- *   streaming — son request/response JSON-RPC. Para forwardear SSE chunk
- *   por chunk al browser necesitamos un endpoint PHP normal con
- *   `CURLOPT_WRITEFUNCTION` que va escribiendo al output buffer del cliente.
+ * Why this is NOT an External Function:
+ *   Moodle's `core/ajax` and External Functions system don't support
+ *   streaming — they're request/response JSON-RPC. To forward SSE chunk
+ *   by chunk to the browser we need a plain PHP endpoint with
+ *   `CURLOPT_WRITEFUNCTION` that writes straight to the client's output buffer.
  *
  * Auth:
- *   - sesskey (CSRF protection de Moodle, validada con confirm_sesskey).
- *   - require_login() para garantizar sesión válida.
- *   - require_capability local/nexusai:use en el contexto del curso.
- *   - HMAC server-to-server intacto: se firma con el shared_secret y
- *     nunca se expone al browser. Mantenemos el patrón Hybrid PHP Proxy
+ *   - sesskey (Moodle's CSRF protection, validated with confirm_sesskey).
+ *   - require_login() to guarantee a valid session.
+ *   - require_capability local/nexusai:use in the course context.
+ *   - Server-to-server HMAC stays intact: it's signed with the shared_secret
+ *     and never exposed to the browser. We keep the Hybrid PHP Proxy pattern
  *     (ADR-001).
  *
- * Input: form-urlencoded o JSON con los mismos campos que chat_send:
- *   - question (string, requerido)
- *   - courseid (int, requerido)
- *   - sessionid (string|empty) — UUID de sesión existente
+ * Input: form-urlencoded or JSON with the same fields as chat_send:
+ *   - question (string, required)
+ *   - courseid (int, required)
+ *   - sessionid (string|empty) — existing session UUID
  *   - multicourse (bool|0/1) — Feature B
  *
- * Output: stream Server-Sent Events. Cada evento es un line de
+ * Output: Server-Sent Events stream. Each event is a line of
  *   `data: {"type":"token|meta|done|error",...}\n\n`.
  *
  * @package    local_nexusai
@@ -45,9 +45,9 @@
  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-// Streaming requiere desactivar el output buffering desde el principio.
-// Constantes deben definirse ANTES de cargar config.php para evitar
-// que Moodle inicialice buffering propio.
+// Streaming requires disabling output buffering from the start.
+// Constants must be defined BEFORE loading config.php to prevent
+// Moodle from initializing its own buffering.
 define('NO_DEBUG_DISPLAY', true);
 define('NO_OUTPUT_BUFFERING', true);
 
@@ -63,13 +63,21 @@ if (isguestuser()) {
 }
 require_sesskey();
 
-// Parsear input.
-// Soporta tanto JSON body como form-urlencoded (mayor flexibilidad para
-// fetch() desde React).
+// Errors before the stream starts go out as JSON with a translated `detail`:
+// the widget shows that text as is (react/src/components/errors.js).
+$fail = static function (int $status, string $message): void {
+    http_response_code($status);
+    echo json_encode(['detail' => $message], JSON_UNESCAPED_UNICODE);
+    exit;
+};
+
+// Parse input.
+// Supports both a JSON body and form-urlencoded (more flexibility for
+// fetch() from React).
 $rawbody = file_get_contents('php://input');
 $payload = json_decode($rawbody, true);
 if (!is_array($payload)) {
-    // Fallback a $_POST si no es JSON.
+    // Fallback to $_POST if it's not JSON.
     $payload = $_POST;
 }
 
@@ -79,178 +87,175 @@ $sessionid   = isset($payload['sessionid']) ? (string) $payload['sessionid'] : '
 $multicourse = !empty($payload['multicourse']);
 
 if ($courseid <= 0) {
-    http_response_code(400);
-    echo json_encode(['error' => 'courseid required']);
-    exit;
+    $fail(400, get_string('errorcourseidrequired', 'local_nexusai'));
 }
 
-// Validar capability en el contexto del curso.
+// Validate the capability in the course context.
 $context = context_course::instance($courseid);
 require_capability('local/nexusai:use', $context);
+if (!\local_nexusai\local\course_guard::is_enabled($courseid)) {
+    $fail(403, get_string('coursedisabled', 'local_nexusai'));
+}
 
-// Validaciones de negocio.
+// Business validations.
 $cleanquestion = trim($question);
 if ($cleanquestion === '') {
-    http_response_code(400);
-    echo json_encode(['error' => 'question required']);
-    exit;
+    $fail(400, get_string('errorquestionempty', 'local_nexusai'));
 }
 if (mb_strlen($cleanquestion) > 2000) {
-    http_response_code(400);
-    echo json_encode(['error' => 'question too long']);
-    exit;
+    $fail(400, get_string('errorquestiontoolong', 'local_nexusai', 2000));
 }
 $cleansessionid = trim($sessionid);
 if ($cleansessionid !== '' && (strlen($cleansessionid) < 8 || strlen($cleansessionid) > 64)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'invalid sessionid']);
-    exit;
+    $fail(400, get_string('errorinvalidparams', 'local_nexusai'));
 }
 
-// Armar payload para el backend Python.
-$bodyarray = [
-    'question'  => $cleanquestion,
-    'course_id' => $courseid,
-    'user_id'   => (int) $USER->id,
-];
-if ($cleansessionid !== '') {
-    $bodyarray['session_id'] = $cleansessionid;
-}
+// The answer is stored when the backend finishes, even if the student closes
+// the tab halfway: keep running after the browser goes away (DATA-05).
+ignore_user_abort(true);
 
-// Feature B: resolver cursos del alumno si multicourse=true.
-if ($multicourse) {
-    $enrolled = enrol_get_users_courses(
+// Store the question and build the request (DATA-05): the conversation lives in
+// Moodle and the backend gets the history. userid is always the session's.
+try {
+    $turn = new \local_nexusai\local\chat_turn(
         (int) $USER->id,
-        true,
-        ['id', 'shortname', 'fullname']
+        $courseid,
+        $cleanquestion,
+        $cleansessionid !== '' ? $cleansessionid : null,
+        $multicourse
     );
-    $courseids   = [];
-    $coursenames = [];
-    foreach ($enrolled as $course) {
-        $cid = (int) $course->id;
-        $courseids[] = $cid;
-        $coursenames[(string) $cid] = $course->fullname ?? $course->shortname ?? 'Materia';
-    }
-    if (empty($courseids)) {
-        $courseids   = [$courseid];
-        $coursenames = [(string) $courseid => 'Materia actual'];
-    }
-    $bodyarray['course_id']    = (int) $courseids[0];
-    $bodyarray['course_ids']   = $courseids;
-    $bodyarray['course_names'] = $coursenames;
+} catch (\moodle_exception $e) {
+    $fail(404, get_string('errorsessionnotfound', 'local_nexusai'));
 }
+$bodyarray = $turn->payload();
+
+// Only material from activities this user can see (VIS-02). Computed here, on
+// the server, for the courses in the body: never taken from the browser.
+$bodyarray['visible_cmids'] = \local_nexusai\local\visible_material::for_courses(
+    $bodyarray['course_ids'] ?? [$bodyarray['course_id']]
+);
 
 $body = json_encode($bodyarray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 if ($body === false) {
-    http_response_code(500);
-    echo json_encode(['error' => 'json encode failed']);
-    exit;
+    $fail(500, get_string('errorbackend', 'local_nexusai', 'JSON encode failed'));
 }
 
-// Config del backend (igual que backend_client).
-$endpoint = rtrim((string) get_config('local_nexusai', 'api_endpoint'), '/');
-$apikey   = (string) get_config('local_nexusai', 'api_key');
-$secret   = (string) get_config('local_nexusai', 'shared_secret');
+// Backend config (same as backend_client).
+$endpoint = rtrim(trim((string) get_config('local_nexusai', 'api_endpoint')), '/');
+$apikey   = trim((string) get_config('local_nexusai', 'api_key'));
+$secret   = trim((string) get_config('local_nexusai', 'shared_secret'));
 
-if ($endpoint === '' || $apikey === '' || $secret === '') {
-    http_response_code(500);
-    echo json_encode(['error' => 'plugin not configured']);
-    exit;
+$missing = array_keys(array_filter(
+    ['api_endpoint' => $endpoint, 'api_key' => $apikey, 'shared_secret' => $secret],
+    static fn($value) => $value === ''
+));
+if ($missing) {
+    $fail(500, get_string('errorconfigmissing', 'local_nexusai', implode(', ', $missing)));
 }
 
-// HMAC, mismo ordering que backend_client::compute_signature.
+$streamurl = $endpoint . '/api/v1/chat/stream';
+
+// HMAC, same ordering as backend_client::compute_signature.
 $timestamp = (string) time();
 $nonce     = bin2hex(random_bytes(16));
 $signature = hash_hmac('sha256', $timestamp . $nonce . $body, $secret);
 
-// Headers SSE al browser ANTES de empezar el cURL.
-// CRÍTICO: tienen que ir antes del primer echo/flush, y NO debe haber
-// output buffering por delante.
+// SSE headers to the browser BEFORE starting cURL.
+// CRITICAL: these must come before the first echo/flush, and there must be
+// NO output buffering ahead of them.
 @header('Content-Type: text/event-stream');
 @header('Cache-Control: no-cache');
-@header('X-Accel-Buffering: no');  // Por si nginx está delante.
+@header('X-Accel-Buffering: no');  // In case nginx is in front.
 
-// Flush cualquier output buffer pendiente de Moodle/PHP. Sin esto los chunks
-// se acumulan en memoria y el browser los recibe todos juntos al final.
+// Flush any pending Moodle/PHP output buffer. Without this the chunks pile
+// up in memory and the browser receives them all at once at the end.
 while (ob_get_level() > 0) {
     @ob_end_flush();
 }
 @ob_implicit_flush(true);
 
-// Uso de cURL al backend Python con WRITEFUNCTION.
-// Usamos curl_* de PHP directamente (no la clase \curl de Moodle) porque
-// necesitamos CURLOPT_WRITEFUNCTION para forwardear chunks tal como llegan.
+// The call to the Python backend uses Moodle's \curl class, with
+// CURLOPT_WRITEFUNCTION to forward the chunks as they arrive (MMR-301 item 6).
+// Like backend_client, it passes ignoresecurity: the endpoint is set by the
+// administrator, not by users, and Moodle's default blocked hosts list covers
+// localhost, private networks and ports other than 80/443, where the backend
+// usually runs.
 //
-// FEAT-06 (#481, límite diario): antes de esto, un error del backend que NO
-// llegaba en formato SSE (ej. un 429 de rate limit, que FastAPI devuelve
-// como JSON plano `{"detail":{...}}`, no como `data: {...}\n\n`) se
-// reenviaba tal cual al browser. El parser SSE de React descarta en
-// silencio cualquier línea que no empiece con "data:", así que el alumno
-// se quedaba con el indicador de "escribiendo" colgado para siempre, sin
-// ningún error visible — el 429 nunca llegaba a mostrarse. Para evitarlo,
-// inspeccionamos el status real de la respuesta con CURLOPT_HEADERFUNCTION
-// ANTES de reenviar cuerpo: si no es 2xx, bufferizamos el body (es un JSON
-// chico, no un stream real) y lo reformateamos como un evento SSE de error
-// bien armado en vez de pasarlo crudo.
+// FEAT-06 (#481, daily limit): a backend error that does NOT arrive in SSE
+// format (e.g. a 429 rate limit, which FastAPI returns as plain JSON
+// `{"detail":{...}}`, not as `data: {...}\n\n`) cannot be forwarded as-is:
+// React's SSE parser silently discards any line that doesn't start with
+// "data:", and the student would be left with the "typing" indicator stuck.
+// So the response's status is checked BEFORE forwarding the body: the
+// headers are in by the time the first body bytes reach WRITEFUNCTION, so
+// curl_getinfo() already has the status there. If it's not 2xx, the body is
+// buffered (a small JSON, not a real stream) and turned into a proper SSE
+// error event instead of being passed through raw.
 $httpstatus = null;
 $errorbuffer = '';
+$relay = new \local_nexusai\local\sse_relay($turn, function (string $bytes): void {
+    echo $bytes;
+    @flush();
+});
 
-$ch = curl_init();
-curl_setopt_array($ch, [
-    CURLOPT_URL            => $endpoint . '/api/v1/chat/stream',
-    CURLOPT_POST           => true,
-    CURLOPT_POSTFIELDS     => $body,
-    CURLOPT_HTTPHEADER     => [
-        'Content-Type: application/json',
-        'Authorization: Bearer ' . $apikey,
-        'X-Timestamp: ' . $timestamp,
-        'X-Nonce: '     . $nonce,
-        'X-Signature: ' . $signature,
-        'Accept: text/event-stream',
-    ],
-    CURLOPT_TIMEOUT        => 300,
-    CURLOPT_CONNECTTIMEOUT => 10,
-    CURLOPT_RETURNTRANSFER => false,
-    // Se ejecuta por cada línea de header que llega — usamos la primera
-    // "HTTP/x.x <status>" para saber si el backend respondió 2xx (stream
-    // real) o un error (JSON plano, hay que bufferizar y reformatear).
-    CURLOPT_HEADERFUNCTION => function ($curl, $headerline) use (&$httpstatus) {
-        if ($httpstatus === null && preg_match('#^HTTP/\S+\s+(\d{3})#', $headerline, $m)) {
-            $httpstatus = (int) $m[1];
+$curl = new \curl(['ignoresecurity' => true]);
+$curl->setHeader([
+    'Content-Type: application/json',
+    'Authorization: Bearer ' . $apikey,
+    'X-Timestamp: ' . $timestamp,
+    'X-Nonce: '     . $nonce,
+    'X-Signature: ' . $signature,
+    'Accept: text/event-stream',
+    'Accept-Language: ' . \local_nexusai\external\backend_client::interface_language(),
+    // Who originated the call, for the backend usage ledger (tokens by role).
+    'X-NexusAI-Role: ' . $turn->role(),
+]);
+$curl->setopt(\local_nexusai\external\backend_client::curl_hardening() + [
+    'CURLOPT_TIMEOUT'        => 300,
+    'CURLOPT_CONNECTTIMEOUT' => 10,
+    // Moodle's \curl returns the body as a string by default; the callback forwards it instead.
+    'CURLOPT_RETURNTRANSFER' => 0,
+    // Compressed responses arrive in blocks, which would batch the tokens.
+    'CURLOPT_ENCODING'       => 'identity',
+    // Runs every time bytes arrive from the backend. Once the status says the
+    // response isn't 2xx, the bytes are kept instead of forwarded.
+    'CURLOPT_WRITEFUNCTION'  => function ($ch, $chunk) use (&$httpstatus, &$errorbuffer, $relay) {
+        if ($httpstatus === null) {
+            $httpstatus = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         }
-        return strlen($headerline);
-    },
-    // Callback que se ejecuta cada vez que llegan bytes del backend. Si ya
-    // sabemos que la respuesta no es 2xx, acumulamos en vez de reenviar
-    // (mejor esfuerzo: por si el error viniera en varios chunks).
-    CURLOPT_WRITEFUNCTION  => function ($curl, $chunk) use (&$httpstatus, &$errorbuffer) {
-        if ($httpstatus !== null && $httpstatus >= 400) {
+        if ($httpstatus < 200 || $httpstatus >= 300) {
             $errorbuffer .= $chunk;
             return strlen($chunk);
         }
-        echo $chunk;
-        @flush();
-        return strlen($chunk);
+        // The relay forwards the events and stores the answer on `done`.
+        return $relay->write($chunk);
     },
 ]);
 
-$ok = curl_exec($ch);
+$curl->post($streamurl, $body);
+// A response without a body never reaches the callback (e.g. a 502 from a proxy in front).
+$finalstatus = $httpstatus ?? (int) ($curl->get_info()['http_code'] ?? 0);
 
-if ($ok === false) {
-    $err = curl_error($ch);
-    // Si ya hubo un primer flush, mandamos un evento de error SSE inline.
+if ($relay->ended()) {
+    // The backend already closed the stream with `done` (answer stored) or with its own
+    // `error`: nothing to add, even if the connection dropped right after.
+    exit;
+}
+if ($curl->get_errno() || ($finalstatus >= 200 && $finalstatus < 300) || $errorbuffer === '') {
+    // Unreachable, cut mid-stream or an error without a body. The technical reason
+    // goes to the debugging log; the student gets a message in their language.
+    debugging('[NexusAI] Chat stream failed: HTTP ' . $finalstatus . ' ' . $curl->error, DEBUG_NORMAL);
     echo "data: " . json_encode([
         'type'   => 'error',
-        'detail' => 'backend_unreachable: ' . substr($err, 0, 200),
-    ]) . "\n\n";
+        'detail' => get_string('errorchatunavailable', 'local_nexusai'),
+    ], JSON_UNESCAPED_UNICODE) . "\n\n";
     @flush();
-} else if ($httpstatus !== null && $httpstatus >= 400 && $errorbuffer !== '') {
+} else {
     echo "data: " . json_encode([
         'type'   => 'error',
-        'detail' => \local_nexusai\external\backend_client::extract_stream_error_detail($errorbuffer, $httpstatus),
+        'detail' => \local_nexusai\external\backend_client::extract_stream_error_detail($errorbuffer, $finalstatus),
     ]) . "\n\n";
     @flush();
 }
 
-curl_close($ch);
 exit;

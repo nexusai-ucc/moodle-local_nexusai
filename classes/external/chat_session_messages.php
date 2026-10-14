@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,9 +17,9 @@
 /**
  * External function `local_nexusai_chat_session_messages`.
  *
- * Devuelve los mensajes completos de una sesión previa para que el frontend
- * pueda continuar la conversación. El backend valida ownership de la sesión
- * contra el user_id del alumno.
+ * Returns the full messages of a previous session so the frontend can
+ * continue the conversation. The backend validates the session's ownership
+ * against the student's user_id.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -28,50 +28,53 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_multiple_structure;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Devuelve los mensajes completos de una sesión previa para que el frontend pueda continuar la conversación.
+ * Returns the full messages of a previous session so the frontend can continue the conversation.
  */
-class chat_session_messages extends \external_api {
+class chat_session_messages extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid'  => new \external_value(PARAM_INT, 'Curso (para capability check)', VALUE_REQUIRED),
-            'sessionid' => new \external_value(PARAM_ALPHANUMEXT, 'UUID de sesión', VALUE_REQUIRED),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid'  => new external_value(PARAM_INT, 'Course (for capability check)', VALUE_REQUIRED),
+            'sessionid' => new external_value(PARAM_ALPHANUMEXT, 'Session UUID', VALUE_REQUIRED),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'session_id' => new \external_value(PARAM_RAW, 'UUID de la sesión'),
-            'messages'   => new \external_multiple_structure(
-                new \external_single_structure([
-                    'id'         => new \external_value(PARAM_ALPHANUMEXT, 'UUID del mensaje'),
-                    'role'       => new \external_value(PARAM_ALPHA, 'user | assistant | system'),
-                    'content'    => new \external_value(PARAM_RAW, 'Texto del mensaje'),
-                    'created_at' => new \external_value(PARAM_RAW, 'ISO timestamp'),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'session_id' => new external_value(PARAM_RAW, 'Session UUID'),
+            'messages'   => new external_multiple_structure(
+                new external_single_structure([
+                    'id'         => new external_value(PARAM_ALPHANUMEXT, 'Message UUID'),
+                    'role'       => new external_value(PARAM_ALPHA, 'user | assistant | system'),
+                    'content'    => new external_value(PARAM_RAW, 'Message text'),
+                    'created_at' => new external_value(PARAM_RAW, 'ISO timestamp'),
                 ])
             ),
         ]);
     }
 
     /**
-     * Devuelve los mensajes completos de una sesión previa para que el frontend pueda continuar la
-     * conversación.
+     * Returns the full messages of a previous session so the frontend can continue the
+     * conversation.
      *
-     * @param int $courseid Curso (para capability check)
-     * @param string $sessionid UUID de sesión
+     * @param int $courseid Course (for capability check)
+     * @param string $sessionid Session UUID
      * @return array
      */
     public static function execute(int $courseid, string $sessionid): array {
@@ -85,14 +88,14 @@ class chat_session_messages extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:use', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $cleansessionid = trim($params['sessionid']);
         if ($cleansessionid === '' || strlen($cleansessionid) < 8 || strlen($cleansessionid) > 64) {
-            throw new \invalid_parameter_exception('Invalid session id');
+            throw new \moodle_exception('errorinvalidparams', 'local_nexusai');
         }
 
-        $client   = new backend_client();
-        $response = $client->get_session_messages((int) $USER->id, $cleansessionid);
+        $response = \local_nexusai\local\chat_store::session_messages((int) $USER->id, $cleansessionid);
 
         if (!isset($response['session_id'], $response['messages'])) {
             throw new \moodle_exception('errorbackend', 'local_nexusai', '', 'Invalid session messages response');

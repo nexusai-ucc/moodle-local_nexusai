@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,9 +17,9 @@
 /**
  * External function `local_nexusai_document_status`.
  *
- * Estado actual de un documento (pending | indexing | indexed | error).
- * La vista docente hace polling cada 3 segundos mientras un documento está
- * indexándose para mostrar progreso.
+ * Current status of a document (pending | indexing | indexed | error).
+ * The teacher view polls every 3 seconds while a document is being indexed
+ * to show progress.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -28,48 +28,49 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Estado actual de un documento (pending | indexing | indexed | error).
+ * Current status of a document (pending | indexing | indexed | error).
  */
-class document_status extends \external_api {
+class document_status extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid'   => new \external_value(PARAM_INT, 'ID del curso (para validar capability)', VALUE_REQUIRED),
-            'documentid' => new \external_value(PARAM_ALPHANUMEXT, 'UUID del documento', VALUE_REQUIRED),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid'   => new external_value(PARAM_INT, 'Course ID (to validate the capability)', VALUE_REQUIRED),
+            'documentid' => new external_value(PARAM_ALPHANUMEXT, 'Document UUID', VALUE_REQUIRED),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'id'            => new \external_value(PARAM_ALPHANUMEXT, 'UUID del documento'),
-            'course_id'     => new \external_value(PARAM_INT, 'ID del curso'),
-            'uploader_id'   => new \external_value(PARAM_INT, 'ID del docente'),
-            'filename'      => new \external_value(PARAM_RAW, 'Nombre del archivo'),
-            'mime_type'     => new \external_value(PARAM_RAW, 'MIME type'),
-            'status'        => new \external_value(PARAM_ALPHA, 'pending | indexing | indexed | error'),
-            'error_message' => new \external_value(PARAM_RAW, 'Mensaje de error si aplica', VALUE_OPTIONAL),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'id'            => new external_value(PARAM_ALPHANUMEXT, 'Document UUID'),
+            'course_id'     => new external_value(PARAM_INT, 'Course ID'),
+            'uploader_id'   => new external_value(PARAM_INT, 'Teacher ID'),
+            'filename'      => new external_value(PARAM_RAW, 'File name'),
+            'mime_type'     => new external_value(PARAM_RAW, 'MIME type'),
+            'status'        => new external_value(PARAM_ALPHA, 'pending | indexing | indexed | error'),
+            'error_message' => new external_value(PARAM_RAW, 'Error message, if applicable', VALUE_OPTIONAL),
         ]);
     }
 
     /**
-     * Estado actual de un documento (pending | indexing | indexed | error).
+     * Current status of a document (pending | indexing | indexed | error).
      *
-     * @param int $courseid ID del curso (para validar capability)
-     * @param string $documentid UUID del documento
+     * @param int $courseid Course ID (to validate the capability)
+     * @param string $documentid Document UUID
      * @return array
      */
     public static function execute(int $courseid, string $documentid): array {
@@ -81,13 +82,14 @@ class document_status extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:manage', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $client = new backend_client();
         $document = $client->get_document($params['documentid']);
 
-        // Defensa: verificar que el documento pertenece al curso solicitado.
-        // Esto previene que un docente vea documentos de otros cursos pasando
-        // un courseid distinto al UUID que le corresponde.
+        // Defense: verify the document belongs to the requested course.
+        // This prevents a teacher from viewing documents from other courses
+        // by passing a courseid different from the one the UUID actually belongs to.
         if (((int) ($document['course_id'] ?? 0)) !== (int) $params['courseid']) {
             throw new \moodle_exception(
                 'errorbackend',

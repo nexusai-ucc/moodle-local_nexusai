@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,9 +17,9 @@
 /**
  * External function `local_nexusai_get_pending_uploads`.
  *
- * Devuelve la lista de archivos pendientes de confirmación para el docente actual
- * en un curso dado. Estos archivos fueron subidos a una sección del curso (mod_resource)
- * y están esperando que el docente decida si indexarlos en NexusAI.
+ * Returns the list of files pending confirmation for the current teacher
+ * in a given course. These files were uploaded to a course section
+ * (mod_resource) and are waiting for the teacher to decide whether to index them in NexusAI.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -28,44 +28,46 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_multiple_structure;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Devuelve la lista de archivos pendientes de confirmación para el docente actual en un curso dado.
+ * Returns the list of files pending confirmation for the current teacher in a given course.
  */
-class get_pending_uploads extends \external_api {
+class get_pending_uploads extends external_api {
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid' => new \external_value(PARAM_INT, 'ID del curso', VALUE_REQUIRED),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid' => new external_value(PARAM_INT, 'Course ID', VALUE_REQUIRED),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_multiple_structure {
-        return new \external_multiple_structure(
-            new \external_single_structure([
-                'cmid'     => new \external_value(PARAM_INT, 'Course module ID del recurso'),
-                'filename' => new \external_value(PARAM_TEXT, 'Nombre del archivo'),
-                'mimetype' => new \external_value(PARAM_TEXT, 'MIME type del archivo'),
+    public static function execute_returns(): external_multiple_structure {
+        return new external_multiple_structure(
+            new external_single_structure([
+                'cmid'     => new external_value(PARAM_INT, 'Course module ID of the resource'),
+                'filename' => new external_value(PARAM_TEXT, 'File name'),
+                'mimetype' => new external_value(PARAM_TEXT, 'File MIME type'),
             ])
         );
     }
 
     /**
-     * Devuelve la lista de archivos pendientes de confirmación para el docente actual en un curso dado.
+     * Returns the list of files pending confirmation for the current teacher in a given course.
      *
-     * @param int $courseid ID del curso
+     * @param int $courseid Course ID
      * @return array
      */
     public static function execute(int $courseid): array {
@@ -78,6 +80,7 @@ class get_pending_uploads extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:manage', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $raw     = get_user_preferences(\local_nexusai\observer::PENDING_PREF, '{}');
         $pending = json_decode($raw, true);

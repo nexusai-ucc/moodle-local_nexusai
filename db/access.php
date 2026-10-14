@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,9 +17,9 @@
 /**
  * Capability definitions for local_nexusai.
  *
- * Cada capability define QUIÉN puede hacer QUÉ dentro del plugin.
- * Moodle las usa con `has_capability()` en PHP y permite a los admins ajustarlas
- * por rol desde Site administration → Users → Permissions → Define roles.
+ * Each capability defines WHO can do WHAT within the plugin.
+ * Moodle uses them with `has_capability()` in PHP and lets admins adjust them
+ * per role from Site administration → Users → Permissions → Define roles.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -30,8 +30,8 @@ defined('MOODLE_INTERNAL') || die();
 
 $capabilities = [
 
-    // Permite ver y usar el chat de NexusAI dentro de un curso.
-    // Por defecto: estudiantes, profesores y administradores.
+    // Allows viewing and using the NexusAI chat within a course.
+    // Default: students, teachers and administrators.
     'local/nexusai:use' => [
         'captype'      => 'read',
         'contextlevel' => CONTEXT_COURSE,
@@ -43,23 +43,11 @@ $capabilities = [
         ],
     ],
 
-    // Permite gestionar materiales del curso para indexación (subir PDFs,
-    // re-indexar, ver el estado del pipeline RAG).
-    // Por defecto: solo profesores y admins.
+    // Allows managing course materials for indexing (uploading PDFs,
+    // re-indexing, viewing the RAG pipeline status).
+    // Default: only teachers and admins.
     'local/nexusai:manage' => [
         'captype'      => 'write',
-        'contextlevel' => CONTEXT_COURSE,
-        'archetypes'   => [
-            'editingteacher' => CAP_ALLOW,
-            'manager'        => CAP_ALLOW,
-        ],
-    ],
-
-    // Permite ver el dashboard de analytics agregado de un curso (lagunas
-    // de aprendizaje, preguntas frecuentes, etc.).
-    // Post-MVP, pero la dejamos definida para no migrar después.
-    'local/nexusai:viewanalytics' => [
-        'captype'      => 'read',
         'contextlevel' => CONTEXT_COURSE,
         'archetypes'   => [
             'editingteacher' => CAP_ALLOW,

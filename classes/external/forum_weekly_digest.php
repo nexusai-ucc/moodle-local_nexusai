@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,20 +17,21 @@
 /**
  * External function `local_nexusai_forum_weekly_digest`.
  *
- * Resumen semanal del foro para el docente (FOR-06, #367): junta todas las
- * discusiones con actividad nueva en los últimos N días de TODOS los foros
- * del curso y las manda al backend, que arma un único resumen sintetizado
- * y además marca por hilo si parece "urgente" (FOR-05, #366, heurística sin
- * LLM) — un solo endpoint combinado, ver docstring del router Python.
+ * Weekly forum digest for the teacher (FOR-06, #367): gathers all
+ * discussions with new activity in the last N days across ALL of the
+ * course's forums and sends them to the backend, which builds a single
+ * synthesized summary and also flags each thread as "urgent" or not
+ * (FOR-05, #366, heuristic, no LLM) — a single combined endpoint, see the
+ * Python router's docstring.
  *
- * El backend NexusAI no tiene copia de foros/discusiones/posts — solo
- * embeddings para duplicados. Moodle sí tiene los timestamps
- * (`timemodified`), así que "qué tuvo actividad esta semana" se resuelve
- * acá con SQL directo contra las tablas nativas, igual que
- * `forum_summarize_thread.php` ya hace para un único hilo.
+ * The NexusAI backend has no copy of forums/discussions/posts — only
+ * embeddings for duplicates. Moodle does have the timestamps
+ * (`timemodified`), so "what had activity this week" is resolved here
+ * with direct SQL against the native tables, same as
+ * `forum_summarize_thread.php` already does for a single thread.
  *
- * Solo docentes (`local/nexusai:manage`) — es un resumen para EL DOCENTE,
- * no una función de alumno.
+ * Teachers only (`local/nexusai:manage`) — it's a summary FOR THE TEACHER,
+ * not a student-facing function.
  *
  * @package    local_nexusai
  * @copyright  2026 NexusAI Team — UCC
@@ -39,62 +40,65 @@
 
 namespace local_nexusai\external;
 
-defined('MOODLE_INTERNAL') || die();
-require_once($GLOBALS['CFG']->libdir . '/externallib.php');
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_multiple_structure;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 /**
- * Resumen semanal del foro para el docente (FOR-06, #367): junta todas las discusiones con actividad nueva en
- * los últimos N días de TODOS los foros del curso y las manda al backend, que arma un único resumen
- * sintetizado y además marca por hilo si parece "urgente" (FOR-05, #366, heurística sin LLM) — un solo
- * endpoint combinado, ver docstring del router Python.
+ * Weekly forum digest for the teacher (FOR-06, #367): gathers all discussions with new activity
+ * in the last N days across ALL of the course's forums and sends them to the backend, which
+ * builds a single synthesized summary and also flags each thread as "urgent" or not (FOR-05,
+ * #366, heuristic, no LLM) — a single combined endpoint, see the Python router's docstring.
  */
-class forum_weekly_digest extends \external_api {
+class forum_weekly_digest extends external_api {
     /**
-     * @var int Máximo de discusiones que se envían al backend en un solo digest — mismo tope
-     *     que el backend declara (WeeklyDigestRequest.discussions).
+     * @var int Max discussions sent to the backend in a single digest — same cap
+     *     the backend declares (WeeklyDigestRequest.discussions).
      */
     const MAX_DISCUSSIONS = 15;
 
-    /** @var int Máximo de posts por discusión (solo los de la ventana de días). */
+    /** @var int Max posts per discussion (only the ones within the days window). */
     const MAX_POSTS_PER_DISCUSSION = 20;
 
-    /** @var int Truncado por post para no inflar el contexto del LLM. */
+    /** @var int Per-post truncation so as not to inflate the LLM's context. */
     const MAX_CHARS_PER_POST = 1000;
 
     /**
      * Parameters for execute().
      *
-     * @return \external_function_parameters
+     * @return external_function_parameters
      */
-    public static function execute_parameters(): \external_function_parameters {
-        return new \external_function_parameters([
-            'courseid' => new \external_value(PARAM_INT, 'ID del curso de Moodle', VALUE_REQUIRED),
-            'days'     => new \external_value(PARAM_INT, 'Ventana de días hacia atrás (1..30)', VALUE_DEFAULT, 7),
+    public static function execute_parameters(): external_function_parameters {
+        return new external_function_parameters([
+            'courseid' => new external_value(PARAM_INT, 'Moodle course ID', VALUE_REQUIRED),
+            'days'     => new external_value(PARAM_INT, 'Days-back window (1..30)', VALUE_DEFAULT, 7),
         ]);
     }
 
     /**
      * Return value for execute().
      *
-     * @return \external_single_structure
+     * @return external_single_structure
      */
-    public static function execute_returns(): \external_single_structure {
-        return new \external_single_structure([
-            'course_id'         => new \external_value(PARAM_INT, 'ID del curso'),
-            'period_days'       => new \external_value(PARAM_INT, 'Ventana de días usada'),
-            'discussion_count'  => new \external_value(PARAM_INT, 'Cantidad de discusiones con actividad'),
-            'discussions'       => new \external_multiple_structure(
-                new \external_single_structure([
-                    'discussion_id'   => new \external_value(PARAM_INT, 'ID de la discusión'),
-                    'discussion_name' => new \external_value(PARAM_RAW, 'Título de la discusión'),
-                    'forum_name'      => new \external_value(PARAM_RAW, 'Nombre del foro'),
-                    'post_count'      => new \external_value(PARAM_INT, 'Posts nuevos en la ventana'),
-                    'urgent'          => new \external_value(PARAM_BOOL, 'Si algún post del hilo parece urgente/frustrado'),
+    public static function execute_returns(): external_single_structure {
+        return new external_single_structure([
+            'course_id'         => new external_value(PARAM_INT, 'Course ID'),
+            'period_days'       => new external_value(PARAM_INT, 'Days window used'),
+            'discussion_count'  => new external_value(PARAM_INT, 'Number of discussions with activity'),
+            'discussions'       => new external_multiple_structure(
+                new external_single_structure([
+                    'discussion_id'   => new external_value(PARAM_INT, 'Discussion ID'),
+                    'discussion_name' => new external_value(PARAM_RAW, 'Discussion title'),
+                    'forum_name'      => new external_value(PARAM_RAW, 'Forum name'),
+                    'post_count'      => new external_value(PARAM_INT, 'New posts within the window'),
+                    'urgent'          => new external_value(PARAM_BOOL, 'Whether some post in the thread looks urgent/frustrated'),
                 ])
             ),
-            'summary'           => new \external_value(
+            'summary'           => new external_value(
                 PARAM_RAW,
-                'Resumen de la semana generado por el LLM',
+                'Week summary generated by the LLM',
                 VALUE_OPTIONAL,
                 null,
                 NULL_ALLOWED
@@ -103,13 +107,14 @@ class forum_weekly_digest extends \external_api {
     }
 
     /**
-     * Resumen semanal del foro para el docente (FOR-06, #367): junta todas las discusiones con actividad
-     * nueva en los últimos N días de TODOS los foros del curso y las manda al backend, que arma un único
-     * resumen sintetizado y además marca por hilo si parece "urgente" (FOR-05, #366, heurística sin LLM) — un
-     * solo endpoint combinado, ver docstring del router Python.
+     * Weekly forum digest for the teacher (FOR-06, #367): gathers all discussions with new
+     * activity in the last N days across ALL of the course's forums and sends them to the
+     * backend, which builds a single synthesized summary and also flags each thread as "urgent"
+     * or not (FOR-05, #366, heuristic, no LLM) — a single combined endpoint, see the Python
+     * router's docstring.
      *
-     * @param int $courseid ID del curso de Moodle
-     * @param int $days Ventana de días hacia atrás (1..30)
+     * @param int $courseid Moodle course ID
+     * @param int $days Days-back window (1..30)
      * @return array
      */
     public static function execute(int $courseid, int $days = 7): array {
@@ -123,14 +128,16 @@ class forum_weekly_digest extends \external_api {
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('local/nexusai:manage', $context);
+        \local_nexusai\local\course_guard::require_enabled((int) $params['courseid']);
 
         $days = max(1, min(30, (int) $params['days']));
         $since = time() - ($days * DAYSECS);
 
-        // Discusiones con actividad reciente en CUALQUIER foro del curso,
-        // más recientes primero, tope defensivo antes de armar el payload.
+        // Discussions with recent activity in ANY of the course's forums, most recent
+        // first. More are read than the digest keeps, since some are filtered out below;
+        // MAX_DISCUSSIONS applies to the ones that stay.
         $discussionrows = $DB->get_records_sql(
-            "SELECT fd.id AS discussionid, fd.name AS discussionname, f.name AS forumname
+            "SELECT fd.*, f.name AS forumname
                FROM {forum_discussions} fd
                JOIN {forum} f ON f.id = fd.forum
               WHERE f.course = :courseid
@@ -138,7 +145,7 @@ class forum_weekly_digest extends \external_api {
            ORDER BY fd.timemodified DESC",
             ['courseid' => (int) $params['courseid'], 'since' => $since],
             0,
-            self::MAX_DISCUSSIONS
+            self::MAX_DISCUSSIONS * 4
         );
 
         if (empty($discussionrows)) {
@@ -153,20 +160,23 @@ class forum_weekly_digest extends \external_api {
 
         $discussions = [];
         foreach ($discussionrows as $drow) {
-            $postrows = $DB->get_records_sql(
-                "SELECT fp.id, fp.message,
-                        " . $DB->sql_fullname('u.firstname', 'u.lastname') . " AS author
-                   FROM {forum_posts} fp
-                   JOIN {user} u ON u.id = fp.userid
-                  WHERE fp.discussion = :discussionid
-                    AND fp.created >= :since
-               ORDER BY fp.created ASC",
-                ['discussionid' => (int) $drow->discussionid, 'since' => $since],
-                0,
-                self::MAX_POSTS_PER_DISCUSSION
-            );
+            if (count($discussions) >= self::MAX_DISCUSSIONS) {
+                break;
+            }
+            // The digest can be posted to the course's webhook, where everyone in that
+            // channel reads it (MMR-301 item 2). So it only carries what this teacher can
+            // see AND every participant of the course can see: no hidden or restricted
+            // forum, no group discussion, nothing outside its display period, no Q&A
+            // forum, and never a private reply.
+            $guard = \local_nexusai\local\forum_access_guard::class;
+            if (!$guard::can_view_discussion((int) $drow->id, (int) $params['courseid']) || !$guard::is_open_to_course($drow)) {
+                continue;
+            }
+            // Authors go out as pseudonyms, numbered per discussion: no name leaves Moodle.
+            $postrows = $guard::visible_posts($drow, $since, false, self::MAX_POSTS_PER_DISCUSSION);
 
             $posts = [];
+            $aliases = new \local_nexusai\local\forum_author_alias();
             foreach ($postrows as $prow) {
                 $content = strip_tags($prow->message);
                 $content = html_entity_decode($content, ENT_QUOTES | ENT_HTML5, 'UTF-8');
@@ -179,21 +189,21 @@ class forum_weekly_digest extends \external_api {
                 }
                 $posts[] = [
                     'post_id' => (int) $prow->id,
-                    'author'  => (string) $prow->author,
+                    'author'  => $aliases->for_user((int) $prow->userid),
                     'content' => $content,
                 ];
             }
 
-            // Discusión con actividad "nueva" en Moodle (timemodified) pero
-            // cuyos posts individuales quedaron vacíos tras limpiar HTML —
-            // no tiene sentido mandarla al backend (min_length=1 en el schema).
+            // Discussion with "new" activity in Moodle (timemodified) but
+            // whose individual posts ended up empty after stripping HTML —
+            // no point sending it to the backend (min_length=1 in the schema).
             if (empty($posts)) {
                 continue;
             }
 
             $discussions[] = [
-                'discussion_id'   => (int) $drow->discussionid,
-                'discussion_name' => (string) $drow->discussionname,
+                'discussion_id'   => (int) $drow->id,
+                'discussion_name' => (string) $drow->name,
                 'forum_name'      => (string) $drow->forumname,
                 'posts'           => $posts,
             ];

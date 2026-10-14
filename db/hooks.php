@@ -1,5 +1,5 @@
 <?php
-// This file is part of the NexusAI plugin for Moodle.
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,14 +17,12 @@
 /**
  * Hook callbacks registration for local_nexusai.
  *
- * Moodle 4.4 introdujo un nuevo sistema de hooks tipado (en lugar de los callbacks
- * basados en convención de nombres como `<plugin>_before_footer`). Este archivo
- * mapea hooks de core a clases listener nuestras.
+ * Moodle 4.4 introduced a new typed hooks system (instead of naming-convention
+ * callbacks like `<plugin>_before_footer`). This file maps core hooks to our
+ * listener classes.
  *
- * Sin esto, en Moodle 4.4+, el HTML que retorna `local_nexusai_before_footer()`
- * NO se imprime (solo se muestra un warning de deprecación).
- *
- * En Moodle 4.1-4.3 este archivo es ignorado y se usa el callback viejo de lib.php.
+ * It is the only way the widget is injected: the plugin requires Moodle 4.5,
+ * so the old `local_nexusai_before_footer()` callback no longer exists.
  *
  * Ref: https://moodledev.io/docs/4.4/apis/core/hooks
  *
@@ -44,6 +42,11 @@ $callbacks = [
     [
         'hook'     => \core\hook\navigation\primary_extend::class,
         'callback' => [\local_nexusai\hook\navigation\primary_extend_listener::class, 'callback'],
+        'priority' => 0,
+    ],
+    [
+        'hook'     => \core_course\hook\before_course_deleted::class,
+        'callback' => [\local_nexusai\hook\course\before_course_deleted_listener::class, 'callback'],
         'priority' => 0,
     ],
 ];
