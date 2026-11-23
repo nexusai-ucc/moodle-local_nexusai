@@ -115,7 +115,10 @@ describe("sendMessageStream — parser SSE real", () => {
         );
 
         expect(onToken).toHaveBeenCalledWith("Esto es lo que alcanzó a llegar ");
-        expect(onError).toHaveBeenCalledWith("El proveedor LLM no respondió a tiempo");
+        expect(onError).toHaveBeenCalledWith(
+            "El proveedor LLM no respondió a tiempo",
+            expect.objectContaining({ type: "error" })
+        );
         expect(onDone).not.toHaveBeenCalled();
     });
 
@@ -134,7 +137,7 @@ describe("sendMessageStream — parser SSE real", () => {
 
         await sendMessageStream({ question: "hola", courseId: 1 }, { onError });
 
-        expect(onError).toHaveBeenCalledWith("timeout del proxy");
+        expect(onError).toHaveBeenCalledWith("timeout del proxy", expect.objectContaining({ type: "error" }));
         // Un solo disparo: ni el "mejor esfuerzo" sobre el buffer trunco ni
         // el chequeo de "nunca llegó un evento terminal" deberían duplicarlo.
         expect(onError).toHaveBeenCalledTimes(1);
@@ -210,5 +213,38 @@ describe("sendMessageStream — messages in the interface language", () => {
         await expect(
             sendMessageStream({ question: "   ", courseId: 1 }, {})
         ).rejects.toThrow("La pregunta no puede estar vacía");
+    });
+});
+
+describe("sendMessage sin Moodle (modo de desarrollo)", () => {
+    it("responde con un mensaje de ejemplo después de la demora simulada", async () => {
+        // Arrange.
+        const { sendMessage, resetMockState } = await import("./chat.js");
+        resetMockState();
+
+        // Act.
+        const { withFakeTimers } = await import("../test-utils/moodleAjax.js");
+        const result = await withFakeTimers(() => sendMessage({ question: "Hola", courseId: 1, userId: 1 }));
+
+        // Assert.
+        expect(JSON.stringify(result)).toMatch(/respuesta de prueba|mock/i);
+    });
+});
+
+describe("sendMessageStream — My API key", () => {
+    it("passes the error event so the widget knows the user's own key failed", async () => {
+        const event = {
+            type: "error",
+            detail: "Anthropic rechazó tu API key.",
+            code: "user_llm_failed",
+            reason: "rejected",
+        };
+        global.fetch.mockResolvedValue(fakeStreamResponse(sseChunks([`data: ${JSON.stringify(event)}\n\n`])));
+        const onError = vi.fn();
+
+        await sendMessageStream({ question: "hola", courseId: 1 }, { onError });
+
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(onError).toHaveBeenCalledWith(event.detail, expect.objectContaining({ code: "user_llm_failed" }));
     });
 });

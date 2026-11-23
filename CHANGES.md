@@ -3,6 +3,70 @@
 All notable changes to the NexusAI Moodle plugin are documented in this
 file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.20.0] — 2026-11-23
+
+- Added: "My API key". A student or teacher can save the API key of their own
+  account with an AI provider (OpenAI, Anthropic, Google Gemini, Groq,
+  OpenRouter, Mistral or DeepSeek) and a model. The key is tested with the
+  provider before it is saved, stored encrypted (`\core\encryption`) in a user
+  preference and never shown again in full. The backend uses it only as the
+  last link of its model chain: when the institution's models are out of quota
+  or down, or when the user reached their token limit. Those calls are paid by
+  the user, are marked in the usage log (new column `local_nexusai_usage.byok`)
+  and do not count towards the user's limit. Answers written with the key show
+  a "With your key" mark, and the usage bar says the chat goes on with it. When
+  the provider refuses the key (rejected, no quota left, unknown model, request
+  not accepted, not responding), the user reads why in a language string that
+  names their provider. Only printable ASCII keys without spaces are accepted.
+- Added: site setting "Users can add their own API key"
+  (`local_nexusai/user_llm_enabled`), **off by default**: with the user's key
+  the question and excerpts of the course material also reach the provider
+  that user chose, so each site opts in. Once it is on, each course can turn
+  it off from "NexusAI in this course". The key is only sent for requests the
+  logged-in user made (never from tasks), and only when every course of the
+  request allows it. Declared in the privacy API: the key reaches the NexusAI
+  backend (used in memory for that request, never stored) and the provider the
+  user chose (new external location); the new user preference is exported
+  with the provider and model, never the key.
+- Fixed: several student and teacher features always showed their default
+  values: the suggested quiz difficulty, the flashcards summary, the study
+  streak and the forum webhook setting. The web service calls waited for the
+  array that `core/ajax` returns instead of the promise inside it.
+- Fixed: an answer cut before its first word was stored empty, and the backend
+  refused the whole conversation history after that (HTTP 422). Empty answers
+  are left out of the history.
+- Fixed: the usage bar no longer breaks the chat when the budget cannot be read.
+- Changed: `chat_stream.php` reads its parameters with `optional_param()`
+  instead of reading `$_POST` directly.
+- Changed: the "My API key" field does not offer to save or autofill the key
+  as a login password, and tells the user about spaces and accented letters
+  before sending.
+- Changed: the CLI scripts load `config.php` with `require_once`.
+- Changed: code comments in the React source and its bundles are in English.
+- Fixed: text contrast now meets WCAG 2.2 AA (4.5:1) in the chat widget and the
+  teacher panel, in light and dark mode (checked with axe-core). The primary
+  indigo goes from `#6366f1` to `#4f46e5` (white text on it was 4.47:1); filled
+  controls with white text use a new `--nexusai-primary-solid` token, because the
+  dark-mode `#818cf8` only reached 2.98:1; the muted and subtle grays are darker
+  in light mode and lighter in dark mode. In dark mode the teacher panel now has
+  its own dark background, since its sidebar and intro sat on Moodle's white page.
+- Fixed: the actions column of the materials table has a header for screen readers.
+- Fixed: more accessibility issues found by a full audit (axe-core on every tab,
+  keyboard, 320px reflow, 200% zoom, text spacing, reduced motion):
+  - "Reduce motion" now stops every animation and transition (it only affected
+    the usage bar); the chat auto-scroll is no longer smooth in that mode.
+  - Opening the chat moves focus to the question box; closing it (Escape or the
+    close button) gives focus back to the icon that opened it.
+  - A finished answer is read out by screen readers (`aria-live` region).
+  - Calendar events take their accessible name from the visible text.
+  - Contrast fixes in Calendar, Course review and Forum digest.
+  - The teacher panel no longer scrolls sideways at 320px or 200% zoom: the
+    sidebar goes above the content below 720px.
+  - The active teacher panel tab has `aria-current`; the chat panel title is an
+    `h2`.
+- Security: DOMPurify 3.4.17 (fixes GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr and
+  GHSA-c6gr-qvv4-5v3f) and Vitest 4.1.12 for the tests (GHSA-qxg6-89mg-rqv8).
+
 ## [0.19.0] — 2026-10-14
 
 - Fixed: the calendar feed (`calendar_feed.php`) failed on Moodle 5.0 and later
