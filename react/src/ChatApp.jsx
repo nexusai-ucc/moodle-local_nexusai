@@ -53,12 +53,14 @@ import HistoryDropdown from "./components/HistoryDropdown.jsx";
 import NavMenu from "./components/NavMenu.jsx";
 import Tooltip from "./components/Tooltip.jsx";
 import OnboardingPanel from "./components/OnboardingPanel.jsx";
+import ApiKeyPanel from "./components/ApiKeyPanel.jsx";
 import { IconBookOpen, IconGlobe, IconGrid } from "./components/icons.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
-import { getFriendlyErrorMessage } from "./components/errors.js";
+import { extractUserLlmFailure, getFriendlyErrorMessage } from "./components/errors.js";
 import { sendMessage, sendMessageStream } from "./api/chat.js";
 import BudgetBar from "./components/BudgetBar.jsx";
 import { getSessionMessages } from "./api/history.js";
+import { getUserLlm } from "./api/userLlm.js";
 import { useOnboardingState } from "./onboarding/useOnboardingState.js";
 
 // UX-14 (#373): sessionStorage key for the active tab, per course —
@@ -75,6 +77,7 @@ const SECTION_TITLES = {
     history:     { es: "Historial",            en: "History" },
     review:      { es: "Revisión del curso",   en: "Course review" },
     forumdigest: { es: "Resumen del foro",     en: "Forum digest" },
+    apikey:      { es: "Mi API key",           en: "My API key" },
 };
 
 const STRINGS = {
@@ -89,6 +92,7 @@ const STRINGS = {
         errorGeneric: "Algo salió mal. Tocá «Reintentar» para volver a enviar tu pregunta.",
         errorRetry:   "Reintentar",
         errorDismiss: "Descartar",
+        goToApiKey:   "Ir a Mi API key",
         clearChat:    "Nueva conversación",
         modeMock:     "demo",
         poweredBy:    "Respuestas basadas en el contenido de tu curso",
@@ -110,6 +114,7 @@ const STRINGS = {
         errorGeneric: "Something went wrong. Tap «Retry» to send your message again.",
         errorRetry:   "Retry",
         errorDismiss: "Dismiss",
+        goToApiKey:   "Go to My API key",
         clearChat:    "New conversation",
         modeMock:     "demo",
         poweredBy:    "Answers based on your course content",
@@ -184,10 +189,18 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
     const [sessionId, setSessionId] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    // "My API key": the last error came from the user's own key, so the error
+    // box offers to go and fix it.
+    const [errorIsUserKey, setErrorIsUserKey] = useState(false);
+    // State of the user's own key, for the menu item (null until loaded / outside a course).
+    const [userLlm, setUserLlm] = useState(null);
     const [lastQuestion, setLastQuestion] = useState(null);
     const [multiCourse, setMultiCourse] = useState(false);
     // DATA-05: increased with each answer to refresh the limit bar.
     const [budgetTick, setBudgetTick] = useState(0);
+    // WCAG 4.1.3: finished answer read out by screen readers (the stream
+    // itself is not in a live region — it would announce every token).
+    const [announcement, setAnnouncement] = useState("");
     // UX-14 (#373): active tab stored in sessionStorage, per course —
     // not lost when navigating to another course page and coming back in the
     // same browser session. Only the 4 "destination" tabs (not history/review,
@@ -220,8 +233,36 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
     useEffect(() => {
         if (!open) return;
         const el = messagesEndRef.current;
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "end" });
+        if (!el) return;
+        const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+        el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "end" });
     }, [messages, loading, open]);
+
+    // WCAG 2.4.3: on open, focus moves into the panel (the question box, or
+    // the panel itself on other tabs); on close it goes back to whatever had
+    // it before — usually the navbar icon — instead of being lost on <body>.
+    // The in-panel rail button that opened it unmounts while open, so in that
+    // case focus goes to the rail button rendered again.
+    const returnFocusRef = useRef(null);
+    const wasOpenRef = useRef(false);
+    useEffect(() => {
+        if (open) {
+            wasOpenRef.current = true;
+            const prev = document.activeElement;
+            returnFocusRef.current = prev && prev !== document.body ? prev : null;
+            const panel = panelRef.current;
+            if (panel && !panel.contains(document.activeElement)) {
+                const target = panel.querySelector("textarea") || panel;
+                target.focus({ preventScroll: true });
+            }
+        } else if (wasOpenRef.current) {
+            wasOpenRef.current = false;
+            const prev = returnFocusRef.current;
+            returnFocusRef.current = null;
+            const target = prev?.isConnected ? prev : widgetRef.current?.querySelector(".nexusai-rail");
+            target?.focus({ preventScroll: true });
+        }
+    }, [open]);
 
     // Sync with the navbar icon (outside React) — see
     // amd/src/nav-trigger.js, which fires this event on every click.
@@ -230,6 +271,18 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
         window.addEventListener("nexusai:toggle-panel", handleToggle);
         return () => window.removeEventListener("nexusai:toggle-panel", handleToggle);
     }, []);
+
+    // "My API key": its state, for the menu item. Loaded once the panel opens
+    // in a course; the panel itself refreshes it when the user changes the key.
+    useEffect(() => {
+        if (!open || !hasCourse || userLlm) return undefined;
+        let cancelled = false;
+        getUserLlm(courseid)
+            .then((s) => { if (!cancelled) setUserLlm(s); })
+            // Without the state the menu item is not shown; nothing else breaks.
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [open, hasCourse, courseid, userLlm]);
 
     // UX-14 (#373): store the active tab. Try/catch because sessionStorage
     // can throw in private mode/with blocked storage — it must not break the
@@ -270,6 +323,7 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
 
     const send = async (question) => {
         setError(null);
+        setErrorIsUserKey(false);
         setLastQuestion(question);
 
         const ts = Date.now();
@@ -291,6 +345,7 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
         };
         setMessages((prev) => [...prev, optimisticUserMsg, initialAssistant]);
         setLoading(true);
+        setAnnouncement("");
 
         // Local accumulator — SSE callbacks run in bursts and we want to
         // avoid batch races. We use a ref through a closure.
@@ -346,22 +401,38 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
                         // `bufferedGrounded` matcher below, captured with the local
                         // id) to be able to enable the 👍/👎 feedback only now that
                         // the message is stored.
+                        // "My API key": mark the answers the user's own key wrote.
+                        const metrics = doneEvent?.metrics;
                         setMessages((prev) =>
                             prev.map((m) =>
                                 m.id === streamingAssistantId
-                                    ? { ...m, streaming: false, realId: doneEvent?.assistant_message_id || null }
+                                    ? {
+                                        ...m,
+                                        streaming: false,
+                                        realId: doneEvent?.assistant_message_id || null,
+                                        byok: !!metrics?.byok,
+                                        model: metrics?.byok ? metrics.model || "" : undefined,
+                                      }
                                     : m
                             )
                         );
                     },
-                    onError: (detail) => {
-                        throw new Error(detail);
+                    onError: (detail, event) => {
+                        const streamError = new Error(detail);
+                        // The backend marks the errors of the user's own key: their
+                        // text names the provider and says what to fix.
+                        streamError.userKey = event?.code === "user_llm_failed";
+                        throw streamError;
                     },
                 }
             );
             // Apply the backend's grounded signal after the stream closes.
             // If grounded===false the LLM could not answer with the material →
             // hide the sources even if retrieval returned chunks.
+            const plain = acc.replace(/[#*_`>|~[\]]/g, "").replace(/\s+/g, " ").trim();
+            if (plain) {
+                setAnnouncement(`${lang === "es" ? "Respuesta del asistente" : "Assistant answer"}: ${plain}`);
+            }
             if (bufferedGrounded === false) {
                 setMessages((prev) =>
                     prev.map((m) =>
@@ -378,14 +449,21 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
                     (m) => m.id !== optimisticUserMsg.id && m.id !== streamingAssistantId
                 )
             );
-            setError(getFriendlyErrorMessage(err, t.errorGeneric, lang));
+            const keyFailure = err?.userKey ? { message: err.message } : extractUserLlmFailure(err);
+            if (keyFailure) {
+                setError(keyFailure.message);
+                setErrorIsUserKey(true);
+            } else {
+                setError(getFriendlyErrorMessage(err, t.errorGeneric, lang));
+            }
         } finally {
             setLoading(false);
             setBudgetTick((n) => n + 1);
         }
     };
 
-    const retry = () => { if (lastQuestion) send(lastQuestion); };
+    // `void`: send handles its own errors (try/catch and setError).
+    const retry = () => { if (lastQuestion) void send(lastQuestion); };
 
     // ASIST-03 (#359): resends the last question, replacing the last visible
     // user+assistant pair instead of adding a duplicate one.
@@ -400,7 +478,7 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
             const cut = prev[idx - 1]?.role === "user" ? idx - 1 : idx;
             return prev.slice(0, cut);
         });
-        send(lastQuestion);
+        void send(lastQuestion);
     };
 
     const clearChat = () => {
@@ -454,8 +532,12 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
                     className="nexusai-panel"
                     ref={panelRef}
                     role="dialog"
+                    tabIndex={-1}
                     aria-labelledby="nexusai-title"
                 >
+                    <div className="nexusai-sr-only" role="status" aria-live="polite">
+                        {announcement}
+                    </div>
                     {/* Header */}
                     <header className="nexusai-panel__header">
                         {activeTab === "chat" ? (
@@ -464,9 +546,9 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
                                     <IconSparkle />
                                 </div>
                                 <div className="nexusai-panel__title-group">
-                                    <h3 id="nexusai-title" className="nexusai-panel__title">
+                                    <h2 id="nexusai-title" className="nexusai-panel__title">
                                         {t.title}
-                                    </h3>
+                                    </h2>
                                     <div className="nexusai-panel__status">
                                         <span className="nexusai-panel__status-dot" />
                                         {!isInsideMoodle()
@@ -493,9 +575,9 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
                                         <IconBack />
                                     </button>
                                 </Tooltip>
-                                <h3 id="nexusai-title" className="nexusai-panel__title">
+                                <h2 id="nexusai-title" className="nexusai-panel__title">
                                     {SECTION_TITLES[activeTab]?.[lang === "es" ? "es" : "en"]}
-                                </h3>
+                                </h2>
                             </div>
                         )}
 
@@ -594,6 +676,7 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
                         onSelect={setActiveTab}
                         isTeacher={isTeacher}
                         lang={lang}
+                        userLlm={userLlm}
                     />
 
                     {activeTab === "chat" ? (
@@ -648,13 +731,23 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
                             <div className="nexusai-error" role="alert">
                                 <p className="nexusai-error__text">{error || t.errorGeneric}</p>
                                 <div className="nexusai-error__actions">
-                                    <button
-                                        type="button"
-                                        className="nexusai-btn nexusai-btn--primary"
-                                        onClick={retry}
-                                    >
-                                        {t.errorRetry}
-                                    </button>
+                                    {errorIsUserKey ? (
+                                        <button
+                                            type="button"
+                                            className="nexusai-btn nexusai-btn--primary"
+                                            onClick={() => { setError(null); setErrorIsUserKey(false); setActiveTab("apikey"); }}
+                                        >
+                                            {t.goToApiKey}
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            className="nexusai-btn nexusai-btn--primary"
+                                            onClick={retry}
+                                        >
+                                            {t.errorRetry}
+                                        </button>
+                                    )}
                                     <button
                                         type="button"
                                         className="nexusai-btn nexusai-btn--ghost"
@@ -721,6 +814,17 @@ export default function ChatApp({ courseid, userid, sesskey, wwwroot, lang = "es
                                 skipped={reviewSkipped}
                                 onSkip={reviewSkip}
                                 onUnskip={reviewUnskip}
+                            />
+                        </div>
+                    ) : activeTab === "apikey" ? (
+                        <div className="nexusai-panel__body">
+                            <ApiKeyPanel
+                                courseId={courseid}
+                                lang={lang}
+                                onChange={(next) => {
+                                    setUserLlm(next);
+                                    setBudgetTick((n) => n + 1);
+                                }}
                             />
                         </div>
                     ) : activeTab === "forumdigest" ? (

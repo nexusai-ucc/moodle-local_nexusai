@@ -190,7 +190,8 @@ function DocumentsManagerInner({ courseid, userid, sesskey, lang = "es", courseF
     // ── Carga inicial ──────────────────────────────────────────────────────
     useEffect(() => {
         let cancelled = false;
-        (async () => {
+        // `void`: la función maneja sus errores adentro (try/catch).
+        void (async () => {
             try {
                 const data = await listDocuments(courseid, PAGE_SIZE, 0);
                 if (!cancelled) {
@@ -351,6 +352,7 @@ function DocumentsManagerInner({ courseid, userid, sesskey, lang = "es", courseF
                                 type="button"
                                 className={`nexusai-doc-nav__item ${activeTab === key ? "nexusai-doc-nav__item--active" : ""}`}
                                 onClick={() => setActiveTab(key)}
+                                aria-current={activeTab === key ? "page" : undefined}
                             >
                                 <Icon size={15} />
                                 <span>{label}</span>

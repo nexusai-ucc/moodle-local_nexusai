@@ -20,6 +20,8 @@
  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
+import { randomFloat } from "./random";
+
 /**
  * Chat API client — transport layer between React and the Moodle plugin.
  *
@@ -73,7 +75,7 @@ let mockResponseIdx = 0;
 
 async function mockSendMessage({ question, sessionId }) {
     // Simulate the LLM's latency (between 600ms and 1.4s)
-    const delay = 600 + Math.random() * 800;
+    const delay = 600 + randomFloat() * 800;
     await new Promise((resolve) => setTimeout(resolve, delay));
 
     const newSessionId = sessionId || `mock-session-${Date.now()}`;
@@ -170,12 +172,13 @@ export async function sendMessage({ question, courseId, userId, sessionId, multi
         args.sessionid = sessionId;
     }
 
-    const [response] = await fetchMany([
+    const [responsePromise] = fetchMany([
         {
             methodname: "local_nexusai_chat_send",
             args,
         },
     ]);
+    const response = await responsePromise;
 
     // If the External Function returns an error, core/ajax rejects on its own.
     // If it returns OK, we expect the same shape as the Python backend:
@@ -211,7 +214,7 @@ export async function submitMessageFeedback({ messageId, courseId, isHelpful, co
         return { ok: true };
     }
 
-    const [response] = await fetchMany([
+    const [responsePromise] = fetchMany([
         {
             methodname: "local_nexusai_chat_message_feedback",
             args: {
@@ -222,6 +225,7 @@ export async function submitMessageFeedback({ messageId, courseId, isHelpful, co
             },
         },
     ]);
+    const response = await responsePromise;
 
     return response;
 }
@@ -247,7 +251,8 @@ export async function submitMessageFeedback({ messageId, courseId, isHelpful, co
  * @param {(meta:{session_id:string,chunks:number}) => void} [callbacks.onMeta]
  * @param {(token:string) => void}                          callbacks.onToken
  * @param {(stats:{prompt_tokens:number,completion_tokens:number,total_tokens:number}) => void} [callbacks.onDone]
- * @param {(detail:string) => void}                         [callbacks.onError]
+ * @param {(detail:string, event:Object) => void}           [callbacks.onError] The event carries
+ *   `code: "user_llm_failed"` and `reason` when the user's own API key failed ("My API key").
  * @returns {Promise<void>} resolves when the stream ends
  */
 export async function sendMessageStream(
@@ -319,7 +324,7 @@ export async function sendMessageStream(
                 case "token":       onToken?.(parsed.content || ""); break;
                 case "answer_meta": onAnswerMeta?.(parsed); break;
                 case "done":        receivedTerminalEvent = true; onDone?.(parsed); break;
-                case "error":       receivedTerminalEvent = true; onError?.(parsed.detail || "stream error"); break;
+                case "error":       receivedTerminalEvent = true; onError?.(parsed.detail || "stream error", parsed); break;
             }
         }
     };
