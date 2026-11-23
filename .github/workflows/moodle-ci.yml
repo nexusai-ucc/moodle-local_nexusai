@@ -1,0 +1,209 @@
+name: Moodle Plugin CI
+#
+# Repo separado del monorepo nexusAI vía `git subtree split` (ver
+# https://github.com/nexusai-ucc/nexusAI y la nota de por qué separar el
+# repo para el Moodle Plugins Directory). Este workflow no viajó con el
+# split -- vivía en la raíz real del monorepo, fuera de la carpeta del
+# plugin -- así que se recreó acá con rutas relativas a la raíz de ESTE
+# repo (antes tenían el prefijo NexusAI/plugin/local/nexusai/).
+#
+# El "skip si version.php no existe" del workflow original se sacó: acá
+# corría el chequeo ANTES del actions/checkout, así que el archivo nunca
+# estaba presente todavía y el job entero terminaba saltando todos los
+# pasos en ~20s -- "verde" pero sin haber corrido phpcs/phpunit/behat ni
+# una sola vez. En este repo dedicado version.php siempre existe, así que
+# el chequeo no hace falta: se corre todo sin condicionales.
+
+on:
+  push:
+    branches: [main, development]
+    paths:
+      - '**'
+      - '!react/**'
+      - '.github/workflows/moodle-ci.yml'
+  pull_request:
+    paths:
+      - '**'
+      - '!react/**'
+      - '.github/workflows/moodle-ci.yml'
+
+concurrency:
+  group: moodle-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Moodle ${{ matrix.moodle-branch }} / PHP ${{ matrix.php }} / ${{ matrix.database }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # MMR-301 ítem 12: se prueba cada versión declarada en version.php
+        # ($plugin->supported = [405, 503]), cada una con el PHP más bajo que
+        # acepta, más la última estable con MySQL y el PHP más alto.
+        # Este archivo es el overlay que el sync del monorepo reaplica: se
+        # mantiene igual a .github/workflows/moodle-ci.yml del monorepo salvo
+        # las rutas.
+        include:
+          # Moodle 4.5 LTS (PHP 8.1+)
+          - php: '8.1'
+            moodle-branch: 'MOODLE_405_STABLE'
+            database: 'pgsql'
+          - php: '8.1'
+            moodle-branch: 'MOODLE_405_STABLE'
+            database: 'mysqli'
+          # Moodle 5.0 (PHP 8.2+)
+          - php: '8.2'
+            moodle-branch: 'MOODLE_500_STABLE'
+            database: 'pgsql'
+          # Moodle 5.1 (PHP 8.2+), con el directorio public/
+          - php: '8.2'
+            moodle-branch: 'MOODLE_501_STABLE'
+            database: 'pgsql'
+          # Moodle 5.2 (PHP 8.3+)
+          - php: '8.3'
+            moodle-branch: 'MOODLE_502_STABLE'
+            database: 'pgsql'
+          # Moodle 5.3: última estable (PHP 8.3+)
+          - php: '8.3'
+            moodle-branch: 'MOODLE_503_STABLE'
+            database: 'pgsql'
+            # TPC-01 (#573): cobertura de PHPUnit solo en esta combinación,
+            # para no hacer más lenta toda la matriz.
+            coverage: true
+          - php: '8.4'
+            moodle-branch: 'MOODLE_503_STABLE'
+            database: 'mysqli'
+
+    services:
+      # PostgreSQL 17 y MySQL 8.4: 5.3 pide PG 17 (admin/environment.xml) y 5.0+
+      # MySQL 8.4; 4.5 a 5.2 aceptan los dos, así que sirven para toda la matriz.
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: 'postgres'
+          POSTGRES_HOST_AUTH_METHOD: 'trust'
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'true'
+          MYSQL_DATABASE: 'moodle_test'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Setup PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pgsql, mysqli, mbstring, xml, intl, zip, gd, soap
+          coverage: ${{ matrix.coverage && 'pcov' || 'none' }}
+          ini-values: max_input_vars=5000
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Initialise moodle-plugin-ci
+        run: |
+          composer create-project -n --no-dev --prefer-dist moodlehq/moodle-plugin-ci ci ^4
+          echo $(cd ci/bin; pwd) >> $GITHUB_PATH
+          echo $(cd ci/vendor/bin; pwd) >> $GITHUB_PATH
+          sudo locale-gen en_AU.UTF-8
+          echo "NVM_DIR=$HOME/.nvm" >> $GITHUB_ENV
+
+      - name: Install Moodle + dependencias del plugin
+        run: moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1
+        env:
+          DB: ${{ matrix.database }}
+          MOODLE_BRANCH: ${{ matrix.moodle-branch }}
+
+      # ----------------------------------------------------------------
+      # Validaciones de calidad de código
+      # ----------------------------------------------------------------
+      - name: PHP Lint
+        run: moodle-plugin-ci phplint
+
+      - name: PHP Mess Detector
+        continue-on-error: true
+        run: moodle-plugin-ci phpmd
+
+      - name: PHP CodeSniffer (Moodle Coding Standard)
+        run: moodle-plugin-ci phpcs --max-warnings 0
+
+      - name: PHPDoc checker
+        continue-on-error: true
+        run: moodle-plugin-ci phpdoc
+
+      - name: Validating
+        run: moodle-plugin-ci validate
+
+      - name: Check upgrade savepoints
+        run: moodle-plugin-ci savepoints
+
+      - name: Mustache Lint
+        run: moodle-plugin-ci mustache
+
+      # Grunt borra amd/build/, lo vuelve a armar desde amd/src/ y falla si no
+      # coincide con lo commiteado. Los dos bundles de React están en amd/src/
+      # (webpack los escribe ahí sin minificar, como lib/amd/src/chartjs-lazy.js
+      # en el core) y thirdpartylibs.xml los saca de ESLint. Sin
+      # --max-lint-warnings: ESLint cuenta como warning cada archivo ignorado que
+      # Grunt le pasa explícitamente (los dos bundles), así que con 0 siempre
+      # fallaría. Los warnings de nuestro código se controlan en el paso siguiente.
+      - name: Grunt
+        run: moodle-plugin-ci grunt
+
+      # ESLint sin ningún warning sobre los módulos propios. Se le pasa el
+      # directorio (no archivo por archivo) para que respete el .eslintignore que
+      # Grunt generó a partir de thirdpartylibs.xml y no cuente los bundles.
+      - name: ESLint (sin warnings) en amd/src
+        working-directory: moodle
+        run: |
+          dir=public/local/nexusai
+          [ -d "$dir" ] || dir=local/nexusai
+          npx eslint --max-warnings 0 "$dir/amd/src"
+
+      # ----------------------------------------------------------------
+      # Tests
+      # ----------------------------------------------------------------
+      - name: PHPUnit tests
+        if: ${{ !matrix.coverage }}
+        run: moodle-plugin-ci phpunit --fail-on-warning
+
+      - name: PHPUnit tests con cobertura
+        if: ${{ matrix.coverage }}
+        run: moodle-plugin-ci phpunit --fail-on-warning --coverage-pcov --coverage-text --coverage-clover
+
+      - name: Upload coverage report
+        if: ${{ matrix.coverage }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-coverage
+          # moodle-plugin-ci escribe el clover en getcwd(), la raíz del workspace.
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Behat features
+        continue-on-error: true   # Behat puede ser flaky en CI; no bloquear merge por esto en MVP
+        run: moodle-plugin-ci behat --profile chrome
