@@ -78,25 +78,19 @@ export default function ConfirmModal({
         cancelRef.current?.focus();
     }, []);
 
-    useEffect(() => {
-        const onKeyDown = (e) => {
-            if (e.key === "Escape" && !busy) onCancel();
-        };
-        document.addEventListener("keydown", onKeyDown);
-        return () => document.removeEventListener("keydown", onKeyDown);
-    }, [onCancel, busy]);
-
     return (
+        // The backdrop closes on a click that lands on itself (not on the dialog)
+        // and on Escape: focus starts on "Cancel", so the key arrives here.
         <div
             className="nexusai-confirm-overlay"
-            onClick={() => { if (!busy) onCancel(); }}
+            onClick={(e) => { if (e.target === e.currentTarget && !busy) onCancel(); }}
+            onKeyDown={(e) => { if (e.key === "Escape" && !busy) onCancel(); }}
         >
             <div
                 className="nexusai-confirm"
                 role="alertdialog"
                 aria-modal="true"
                 aria-labelledby="nexusai-confirm-title"
-                onClick={(e) => e.stopPropagation()}
             >
                 <h2 className="nexusai-confirm__title" id="nexusai-confirm-title">
                     {title}
